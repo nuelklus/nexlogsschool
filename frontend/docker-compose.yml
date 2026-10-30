@@ -1,0 +1,27 @@
+
+name: nlschool-frontend
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: nlschool-frontend
+
+    restart: unless-stopped
+
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+
+    ports:
+      - "127.0.0.1:3020:3000"
+
+    networks:
+      - nexlogs-internal-network
+
+networks:
+  nexlogs-internal-network:
+    external: true

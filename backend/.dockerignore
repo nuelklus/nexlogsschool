@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Django
+*.log
+staticfiles/
+media/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database/local files
+*.sqlite3
+db.sqlite3
+
+# Node/frontend
+node_modules/
+.next/
+dist/
+build/
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+
+# Temporary files
+*.tmp
+*.swp
