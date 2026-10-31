@@ -17,7 +17,7 @@ services:
     volumes:
       # Django collected static files
       - ./staticfiles:/app/staticfiles
-
+      - /var/lib/nlschool/media:/var/lib/nlschool/media
       # User-uploaded files
       - ./media:/app/media
 

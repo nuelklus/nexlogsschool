@@ -5,7 +5,6 @@ FROM node:22-alpine AS deps
 WORKDIR /app
 
 COPY package*.json ./
-
 RUN npm ci
 
 
@@ -18,6 +17,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# Public API URL is embedded into the Next.js browser bundle
+ARG NEXT_PUBLIC_API_URL=/api
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
 RUN npm run build
 
@@ -39,3 +42,4 @@ COPY --from=builder /app/.next/static ./.next/static
 EXPOSE 3000
 
 CMD ["node", "server.js"]
+
