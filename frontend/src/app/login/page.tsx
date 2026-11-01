@@ -86,6 +86,7 @@ export default function LoginPage() {
                   <span>
                     <Link href="/password-reset">Forgot password?</Link>
                     <Link href="/account/verification-request">Resend verification</Link>
+                    <Link href="/register">Register a school</Link>
                   </span>
                   <button className="setup-submit" type="submit" disabled={submitting}>
                     {submitting ? "Signing in…" : "Sign in"} <span aria-hidden="true">→</span>

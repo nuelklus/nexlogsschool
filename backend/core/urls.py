@@ -25,11 +25,13 @@ from .views import (
     AcceptStaffInvitationView,
     InitialSchoolSetupView,
     RevokeStaffInvitationView,
+    SchoolRegistrationView,
     StaffInvitationView,
 )
 
 urlpatterns = [
     path("setup/", InitialSchoolSetupView.as_view(), name="initial-school-setup"),
+    path("register/", SchoolRegistrationView.as_view(), name="school-register"),
     path("auth/login/", LoginView.as_view(), name="auth-login"),
     path("auth/refresh/", RefreshView.as_view(), name="auth-refresh"),
     path("auth/logout/", LogoutView.as_view(), name="auth-logout"),

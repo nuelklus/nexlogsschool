@@ -96,6 +96,26 @@ class InitialSchoolSetupTests(TestCase):
         self.assertIn("/account/verify?token=", mail.outbox[0].body)
         self.assertFalse(self.client.get("/api/setup/").data["available"])
 
+    def test_public_registration_works_after_initial_setup(self):
+        self.client.post("/api/setup/", self.payload, format="json")
+        mail.outbox.clear()
+        payload = {
+            **self.payload,
+            "school_email": "info@second.example",
+            "owner_email": "kofi@second.example",
+        }
+
+        response = self.client.post("/api/register/", payload, format="json")
+
+        self.assertEqual(response.status_code, 201)
+        owner = User.objects.get(email="kofi@second.example")
+        self.assertFalse(owner.email_verified)
+        self.assertEqual(Tenant.objects.count(), 2)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("/account/verify?token=", mail.outbox[0].body)
+        duplicate = self.client.post("/api/register/", payload, format="json")
+        self.assertEqual(duplicate.status_code, 400)
+
     def test_setup_is_single_use(self):
         self.client.post("/api/setup/", self.payload, format="json")
         response = self.client.post("/api/setup/", self.payload, format="json")

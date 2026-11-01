@@ -134,7 +134,8 @@ export default function SetupPage() {
               <p className="setup-eyebrow">{message ? "SETUP DISABLED" : "SETUP COMPLETE"}</p>
               <h1>{message ? "Initial setup is not enabled." : "A school is already connected."}</h1>
               <p>{message || "Initial setup can only be completed once."}</p>
-              <Link className="setup-submit" href="/">Return to overview <span aria-hidden="true">→</span></Link>
+              {!message && <Link className="setup-submit" href="/register">Register a school <span aria-hidden="true">→</span></Link>}
+              <Link className="setup-back" href="/">Return to overview</Link>
             </div>
           ) : setupState === "error" ? (
             <div className="setup-state" role="alert">

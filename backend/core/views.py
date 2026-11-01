@@ -14,6 +14,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from .models import (
@@ -62,6 +63,44 @@ def start_trial_subscription(tenant):
 
 def health(request):
     return JsonResponse({"status": "ok", "service": "nlschool-api"})
+
+
+def create_school_with_owner(data, audit_action):
+    school_slug = data["school_slug"]
+    if Tenant.objects.filter(slug=school_slug).exists():
+        suffix = Tenant.objects.count() + 1
+        school_slug = f"{school_slug[: 79 - len(str(suffix))]}-{suffix}"
+
+    tenant = Tenant.objects.create(
+        name=data["school_name"],
+        slug=school_slug,
+        email=data["school_email"],
+        phone=data["school_phone"],
+        country=data["country"],
+        region=data.get("region", ""),
+        address=data.get("address", ""),
+        school_type=data.get("school_type", ""),
+    )
+    owner = User.objects.create_user(
+        email=data["owner_email"],
+        password=data["owner_password"],
+        full_name=data["owner_name"],
+    )
+    Membership.objects.create(
+        tenant=tenant,
+        user=owner,
+        role=Membership.Role.OWNER,
+    )
+    start_trial_subscription(tenant)
+    AuditEvent.objects.create(
+        tenant=tenant,
+        actor=owner,
+        action=audit_action,
+        entity_type="Tenant",
+        entity_id=str(tenant.pk),
+    )
+    send_email_action(owner, EmailActionToken.Purpose.VERIFY_EMAIL)
+    return tenant, owner
 
 
 class InitialSchoolSetupView(APIView):
@@ -113,40 +152,9 @@ class InitialSchoolSetupView(APIView):
                     status=status.HTTP_409_CONFLICT,
                 )
 
-            school_slug = data["school_slug"]
-            if Tenant.objects.filter(slug=school_slug).exists():
-                suffix = Tenant.objects.count() + 1
-                school_slug = f"{school_slug[: 79 - len(str(suffix))]}-{suffix}"
-
-            tenant = Tenant.objects.create(
-                name=data["school_name"],
-                slug=school_slug,
-                email=data["school_email"],
-                phone=data["school_phone"],
-                country=data["country"],
-                region=data.get("region", ""),
-                address=data.get("address", ""),
-                school_type=data.get("school_type", ""),
+            tenant, owner = create_school_with_owner(
+                data, "school.initial_setup_completed"
             )
-            owner = User.objects.create_user(
-                email=data["owner_email"],
-                password=data["owner_password"],
-                full_name=data["owner_name"],
-            )
-            Membership.objects.create(
-                tenant=tenant,
-                user=owner,
-                role=Membership.Role.OWNER,
-            )
-            start_trial_subscription(tenant)
-            AuditEvent.objects.create(
-                tenant=tenant,
-                actor=owner,
-                action="school.initial_setup_completed",
-                entity_type="Tenant",
-                entity_id=str(tenant.pk),
-            )
-            send_email_action(owner, EmailActionToken.Purpose.VERIFY_EMAIL)
 
         return Response(
             {
@@ -175,6 +183,27 @@ class InitialSchoolSetupView(APIView):
             provided_token = request.headers.get("X-NLSchool-Setup-Token", "")
             return hmac.compare_digest(provided_token, expected_token)
         return settings.DEBUG
+
+
+class SchoolRegistrationView(APIView):
+    """Public self-service sign-up; the owner must verify their email before signing in."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_email"
+
+    def post(self, request):
+        serializer = InitialSchoolSetupSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        with transaction.atomic():
+            tenant, owner = create_school_with_owner(
+                serializer.validated_data, "school.self_registered"
+            )
+        return Response(
+            {"school": {"name": tenant.name}, "owner": {"email": owner.email}},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class StaffInvitationView(APIView):
