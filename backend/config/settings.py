@@ -179,14 +179,24 @@ if IS_PRODUCTION:
         )
     if DATABASES['default']['ENGINE'] != 'django.db.backends.postgresql':
         raise ImproperlyConfigured('Production must use PostgreSQL.')
-    sslmode = os.environ.get('DJANGO_DB_SSLMODE', 'verify-full').strip().lower()
-    if sslmode not in {'verify-full', 'verify-ca'}:
-        raise ImproperlyConfigured('DJANGO_DB_SSLMODE must require PostgreSQL TLS verification.')
-    DATABASES['default']['OPTIONS'] = {'sslmode': sslmode}
-    if os.environ.get('DJANGO_DB_SSLROOTCERT'):
-        DATABASES['default']['OPTIONS']['sslrootcert'] = os.environ['DJANGO_DB_SSLROOTCERT']
-    DATABASES['default']['CONN_MAX_AGE'] = 60
-    DATABASES['default']['CONN_HEALTH_CHECKS'] = True
+    sslmode = os.environ.get(
+    'DJANGO_DB_SSLMODE', 'verify-full'
+).strip().lower()
+
+if sslmode not in {'disable', 'verify-full', 'verify-ca'}:
+    raise ImproperlyConfigured(
+        'DJANGO_DB_SSLMODE must be disable, verify-full, or verify-ca.'
+    )
+
+DATABASES['default']['OPTIONS'] = {'sslmode': sslmode}
+
+if sslmode in {'verify-full', 'verify-ca'}:
+    sslrootcert = os.environ.get('DJANGO_DB_SSLROOTCERT')
+    if sslrootcert:
+        DATABASES['default']['OPTIONS']['sslrootcert'] = sslrootcert
+
+DATABASES['default']['CONN_MAX_AGE'] = 60
+DATABASES['default']['CONN_HEALTH_CHECKS'] = True
 
 
 
