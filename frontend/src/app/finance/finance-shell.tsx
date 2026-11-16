@@ -26,6 +26,8 @@ const TABS = [
   { href: "/finance/invoices", label: "Invoices" },
   { href: "/finance/services", label: "Services" },
   { href: "/finance/payments", label: "Payments" },
+  { href: "/finance/income", label: "Other income" },
+  { href: "/finance/money-received", label: "Money received" },
   { href: "/finance/arrears", label: "Arrears" },
   { href: "/finance/advances", label: "Advances" },
   { href: "/finance/transactions", label: "Transactions" },
@@ -119,6 +121,7 @@ function Body({
               </Link>
             ))}
           </nav>
+          {!canApprove && <p className="fin-note">Finance access is restricted by campus. Some school-wide features are unavailable; contact an owner or administrator for access and assistance.</p>}
           {expired ? (
             <ExpiredNotice message={expired} canManage={canApprove} tenantId={membership.tenant_id} authFetch={authFetch} />
           ) : (

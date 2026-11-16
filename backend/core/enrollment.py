@@ -6,6 +6,7 @@ from urllib.parse import quote
 from django.conf import settings
 from django.core.mail import send_mail
 from django.db import IntegrityError, transaction
+from django.db.models import Prefetch
 from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.response import Response
@@ -13,8 +14,10 @@ from rest_framework.views import APIView
 
 from .admission_numbers import get_settings, next_admission_number, validate_config
 from .models import (
+    AcademicYear,
     AdmissionSettings,
     AuditEvent,
+    Campus,
     Membership,
     MembershipInvitation,
     Student,
@@ -25,11 +28,14 @@ from .models import (
 from .subscriptions import require_active_subscription
 
 MANAGE_ROLES = (Membership.Role.OWNER, Membership.Role.SCHOOL_ADMIN)
-READ_ROLES = MANAGE_ROLES + (Membership.Role.ACCOUNTANT, Membership.Role.TEACHER)
+READ_ROLES = MANAGE_ROLES + (Membership.Role.ACCOUNTANT, Membership.Role.TEACHER, Membership.Role.HEADTEACHER)
 
 
 class StudentSerializer(serializers.ModelSerializer):
     portal_account = serializers.SerializerMethodField()
+    grade_level = serializers.SerializerMethodField()
+    campus = serializers.SerializerMethodField()
+    current_class = serializers.SerializerMethodField()
 
     class Meta:
         model = Student
@@ -41,20 +47,106 @@ class StudentSerializer(serializers.ModelSerializer):
             "date_of_birth",
             "gender",
             "grade_level",
+            "current_class",
+            "campus",
             "status",
             "enrolled_on",
             "portal_account",
         )
         read_only_fields = ("id", "portal_account")
 
+    def get_current_class(self, student):
+        current_year_id = self.context.get("current_year_id")
+        if "current_year_id" not in self.context:
+            current_year_id = AcademicYear.objects.filter(
+                tenant_id=student.tenant_id, is_current=True
+            ).values_list("pk", flat=True).first()
+        if current_year_id is None:
+            return None
+        enrollments = getattr(student, "current_year_enrollments", None)
+        if enrollments is None:
+            from academics.models import StudentEnrollment
+            enrollments = list(StudentEnrollment.objects.filter(
+                tenant_id=student.tenant_id, student=student,
+                school_class__academic_year_id=current_year_id, status=StudentEnrollment.Status.ACTIVE,
+            ))
+        return str(enrollments[0].school_class_id) if len(enrollments) == 1 else None
+
+    def get_grade_level(self, student):
+        current_year_id = self.context.get("current_year_id")
+        if current_year_id is None:
+            current_year_id = AcademicYear.objects.filter(
+                tenant_id=student.tenant_id, is_current=True
+            ).values_list("pk", flat=True).first()
+        if current_year_id is not None:
+            enrollments = getattr(student, "current_year_enrollments", None)
+            if enrollments is None:
+                from academics.models import StudentEnrollment
+
+                enrollments = list(
+                    StudentEnrollment.objects.filter(
+                        tenant_id=student.tenant_id,
+                        student=student,
+                        school_class__academic_year_id=current_year_id,
+                        status=StudentEnrollment.Status.ACTIVE,
+                    ).select_related("school_class")
+                )
+            if len(enrollments) == 1:
+                return enrollments[0].school_class.name
+        return student.grade_level
+
+    def get_campus(self, student):
+        current_year_id = self.context.get("current_year_id")
+        if current_year_id is None:
+            current_year_id = AcademicYear.objects.filter(
+                tenant_id=student.tenant_id, is_current=True
+            ).values_list("pk", flat=True).first()
+        if current_year_id is not None:
+            enrollments = getattr(student, "current_year_enrollments", None)
+            if enrollments is None:
+                from academics.models import StudentEnrollment
+
+                enrollments = list(
+                    StudentEnrollment.objects.filter(
+                        tenant_id=student.tenant_id,
+                        student=student,
+                        school_class__academic_year_id=current_year_id,
+                        status=StudentEnrollment.Status.ACTIVE,
+                    ).select_related("campus", "school_class__campus")
+                )
+            if len(enrollments) == 1:
+                enrollment = enrollments[0]
+                campus_id = enrollment.campus_id or enrollment.school_class.campus_id or student.campus_id
+                return str(campus_id) if campus_id else None
+        return str(student.campus_id) if student.campus_id else None
+
     def get_portal_account(self, student):
         return student.user_id is not None
 
 
 class StudentCreateSerializer(StudentSerializer):
+    initial_academic_year = serializers.UUIDField(write_only=True)
+    initial_school_class = serializers.UUIDField(write_only=True)
+    campus = serializers.PrimaryKeyRelatedField(
+        queryset=Campus.objects.none(), allow_null=True, required=False
+    )
+
     class Meta(StudentSerializer.Meta):
         # The admission number is always generated by the server.
-        read_only_fields = ("id", "admission_number", "portal_account", "status")
+        read_only_fields = ("id", "admission_number", "portal_account", "status", "grade_level")
+        fields = StudentSerializer.Meta.fields + ("initial_academic_year", "initial_school_class")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tenant_id = self.context["tenant_id"]
+        self.fields["campus"].queryset = Campus.objects.filter(
+            tenant_id=tenant_id, status=Campus.Status.ACTIVE
+        )
+
+    def create(self, validated_data):
+        validated_data.pop("initial_academic_year")
+        validated_data.pop("initial_school_class")
+        return super().create(validated_data)
 
 
 class StudentUpdateSerializer(StudentSerializer):
@@ -204,32 +296,112 @@ class StudentListCreateView(APIView):
     def get(self, request, tenant_id):
         if _membership(request.user, tenant_id, READ_ROLES) is None:
             return _not_found()
-        students = Student.objects.filter(tenant_id=tenant_id)
+        students = Student.objects.filter(tenant_id=tenant_id).select_related("campus")
+        current_year = AcademicYear.objects.filter(
+            tenant_id=tenant_id, is_current=True
+        ).first()
+        if current_year is not None:
+            from academics.models import StudentEnrollment
+
+            students = students.prefetch_related(
+                Prefetch(
+                    "academic_enrollments",
+                    queryset=StudentEnrollment.objects.filter(
+                        tenant_id=tenant_id,
+                        school_class__academic_year=current_year,
+                        status=StudentEnrollment.Status.ACTIVE,
+                    ).select_related("school_class__campus", "campus"),
+                    to_attr="current_year_enrollments",
+                )
+            )
         status_filter = request.query_params.get("status")
         if status_filter in Student.Status.values:
             students = students.filter(status=status_filter)
-        return Response(StudentSerializer(students, many=True).data)
+        return Response(StudentSerializer(
+            students, many=True, context={"current_year_id": current_year.pk if current_year else None}
+        ).data)
 
     def post(self, request, tenant_id):
         if _membership(request.user, tenant_id, MANAGE_ROLES) is None:
             return _not_found()
-        serializer = StudentCreateSerializer(data=request.data)
+        serializer = StudentCreateSerializer(data=request.data, context={"tenant_id": tenant_id})
         serializer.is_valid(raise_exception=True)
         enrolled_on = serializer.validated_data.get("enrolled_on") or timezone.localdate()
+        from academics.models import SchoolClass, StudentEnrollment
+
         try:
             with transaction.atomic():
+                year = AcademicYear.objects.select_for_update().filter(
+                    pk=serializer.validated_data["initial_academic_year"],
+                    tenant_id=tenant_id,
+                ).first()
+                school_class = SchoolClass.objects.select_for_update().filter(
+                    pk=serializer.validated_data["initial_school_class"],
+                    tenant_id=tenant_id,
+                ).first()
+                if year is None:
+                    raise serializers.ValidationError(
+                        {"initial_academic_year": "Choose an academic year in this school."}
+                    )
+                if school_class is None:
+                    raise serializers.ValidationError(
+                        {"initial_school_class": "Choose a class group in this school."}
+                    )
+                if school_class.academic_year_id != year.pk:
+                    raise serializers.ValidationError(
+                        {"initial_school_class": "Choose a class group from the selected academic year."}
+                    )
+                if not year.start_date <= enrolled_on <= year.end_date:
+                    raise serializers.ValidationError(
+                        {"enrolled_on": "The enrollment date must be within the academic year."}
+                    )
+                if year.status != "active" or not school_class.is_active:
+                    raise serializers.ValidationError(
+                        {"initial_school_class": "Choose an active academic year and class group."}
+                    )
+                campus = serializer.validated_data.get("campus")
+                if campus and school_class.campus_id and campus.pk != school_class.campus_id:
+                    raise serializers.ValidationError(
+                        {"campus": "The selected campus does not match the class group."}
+                    )
+                if school_class.campus_id and campus is None:
+                    campus = school_class.campus
                 number = next_admission_number(tenant_id, enrolled_on)
-                student = serializer.save(tenant_id=tenant_id, admission_number=number)
+                student = serializer.save(
+                    tenant_id=tenant_id,
+                    admission_number=number,
+                    campus=campus,
+                    grade_level=school_class.name if year.is_current else "",
+                )
+                enrollment = StudentEnrollment.objects.create(
+                    tenant_id=tenant_id,
+                    student=student,
+                    campus=campus,
+                    school_class=school_class,
+                    enrolled_on=enrolled_on,
+                )
                 _audit(
                     request, tenant_id, "student.enrolled", "Student", student.pk,
-                    {"admission_number": number, "generated": True},
+                    {
+                        "admission_number": number,
+                        "generated": True,
+                        "academic_year": str(year.pk),
+                        "school_class": str(school_class.pk),
+                    },
+                )
+                _audit(
+                    request, tenant_id, "academic.enrollments.created", "StudentEnrollment", enrollment.pk,
+                    {"student": str(student.pk), "school_class": str(school_class.pk), "initial_admission": True},
                 )
         except IntegrityError:
             return Response(
                 {"detail": "The admission number could not be reserved. Please try again."},
                 status=status.HTTP_409_CONFLICT,
             )
-        return Response(StudentSerializer(student).data, status=status.HTTP_201_CREATED)
+        return Response(
+            StudentSerializer(student, context={"current_year_id": year.pk if year.is_current else None}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class StudentDetailView(APIView):

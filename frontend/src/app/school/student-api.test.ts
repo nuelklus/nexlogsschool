@@ -32,6 +32,8 @@ describe("response guards", () => {
     expect(isStudent(student)).toBe(true);
     expect(isStudent({ ...student, status: "unknown" })).toBe(false);
     expect(isStudent({ ...student, portal_account: "no" })).toBe(false);
+    expect(isStudent({ ...student, current_class: "c1", campus: null })).toBe(true);
+    expect(isStudent({ ...student, current_class: 42 })).toBe(false);
     expect(isStudent(null)).toBe(false);
   });
 
@@ -73,12 +75,18 @@ describe("student requests", () => {
       last_name: "Boateng",
       date_of_birth: "",
       gender: "",
+      enrolled_on: "2026-09-10",
+      initial_academic_year: "y1",
+      initial_school_class: "c1",
     });
     const [path, init] = authFetch.mock.calls[0];
     expect(path).toBe("/tenants/t1/students/");
     expect(JSON.parse(String(init?.body))).toEqual({
       first_name: "Esi",
       last_name: "Boateng",
+      enrolled_on: "2026-09-10",
+      initial_academic_year: "y1",
+      initial_school_class: "c1",
     });
   });
 

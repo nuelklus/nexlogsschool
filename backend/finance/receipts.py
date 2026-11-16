@@ -8,7 +8,7 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 
 
-def receipt_data(payment):
+def receipt_data(payment, *, grade_level=None):
     student = payment.student
     return {
         "receipt_number": payment.receipt_number,
@@ -19,7 +19,7 @@ def receipt_data(payment):
         "student": {
             "name": f"{student.first_name} {student.last_name}",
             "admission_number": student.admission_number,
-            "grade_level": student.grade_level,
+            "grade_level": student.grade_level if grade_level is None else grade_level,
         },
         "payer_name": payment.payer_name,
         "method": payment.method.name,
@@ -34,8 +34,8 @@ def receipt_data(payment):
     }
 
 
-def render_receipt_pdf(payment):
-    data = receipt_data(payment)
+def render_receipt_pdf(payment, *, grade_level=None):
+    data = receipt_data(payment, grade_level=grade_level)
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A5)
     width, height = A5

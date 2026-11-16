@@ -265,8 +265,9 @@ class ExemptionTests(OptionalFeeBase):
         body = {"student": str(self.student.pk), "academic_year": str(self.year.pk), "kind": "exemption", "reason": "x"}
         self.assertEqual(self.client.post(f"{self.base}/adjustments/", body, format="json").status_code, 400)
 
-    def test_accountant_can_adjust_with_reason_others_cannot(self):
-        self.assertEqual(self.exempt(self.as_user(self.accountant)).status_code, 201)
+    def test_restricted_staff_cannot_adjust(self):
+        self.assertEqual(self.exempt(self.as_user(self.accountant)).status_code, 403)
+        self.assertEqual(self.exempt().status_code, 201)
         for user in (self.teacher, self.parent, self.student_user):
             self.assertEqual(self.exempt(self.as_user(user), category=self.lunch).status_code, 404)
 
@@ -274,8 +275,9 @@ class ExemptionTests(OptionalFeeBase):
         adjustment = self.exempt().data
         accountant = self.as_user(self.accountant)
         url = f"{self.base}/adjustments/{adjustment['id']}/revoke/"
-        self.assertEqual(accountant.post(url, {}, format="json").status_code, 400)
-        self.assertEqual(accountant.post(url, {"reason": "Entered in error"}, format="json").status_code, 200)
+        self.assertEqual(accountant.post(url, {"reason": "Entered in error"}, format="json").status_code, 403)
+        self.assertEqual(self.client.post(url, {}, format="json").status_code, 400)
+        self.assertEqual(self.client.post(url, {"reason": "Entered in error"}, format="json").status_code, 200)
         self.assertEqual(self.row()["totals"]["total"], "1000.00")
         self.assertTrue(AuditEvent.objects.filter(tenant=self.tenant, action="finance.adjustment_revoked").exists())
 
@@ -418,7 +420,8 @@ class BulkTests(OptionalFeeBase):
             self.assertEqual(client.post(f"{self.base}/invoices/preview/", self.bulk_body(), format="json").status_code, 404)
             self.assertEqual(client.post(f"{self.base}/invoices/bulk/", self.bulk_body(), format="json").status_code, 404)
             self.assertEqual(client.post(f"{self.base}/service-enrollments/", {}, format="json").status_code, 404)
-        self.assertEqual(self.as_user(self.accountant).post(f"{self.base}/invoices/preview/", self.bulk_body(), format="json").status_code, 200)
+        self.assertEqual(self.as_user(self.accountant).post(f"{self.base}/invoices/preview/", self.bulk_body(), format="json").status_code, 403)
+        self.assertEqual(self.client.post(f"{self.base}/invoices/preview/", self.bulk_body(), format="json").status_code, 200)
 
 
 class OptionalFeeIsolationTests(OptionalFeeBase):

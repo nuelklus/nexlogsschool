@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 
-import { GRADE_LEVELS, TERMS } from "../grade-levels";
+import { ClassOptions, ClassOptionsStatus, useClassOptions } from "../class-options";
+import { NoTermsHint } from "./no-terms-hint";
+import { useTermOptions } from "./use-term-options";
 import { Student, listStudents } from "../school/student-api";
 import { FeeCategory, Invoice, Preview, financeRequest, formatMoney } from "./finance-api";
 import FinanceShell, { FinanceContext, useFinanceData } from "./finance-shell";
@@ -35,6 +37,8 @@ function GenerateForm({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
   const [busy, setBusy] = useState(false);
   const [draftId, setDraftId] = useState("");
   const current = years.find((year) => year.is_current) ?? years[0];
+  const [yearId, setYearId] = useState(current?.id ?? "");
+  const terms = useTermOptions(ctx, yearId);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -77,16 +81,17 @@ function GenerateForm({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
           </select>
         </label>
         <label>Academic year
-          <select name="academic_year" required defaultValue={current?.id ?? ""} key={current?.id ?? "none"}>
+          <select name="academic_year" required value={yearId} onChange={(event) => setYearId(event.target.value)}>
             {years.map((year) => <option key={year.id} value={year.id}>{year.name}</option>)}
           </select>
         </label>
         <label>Term
-          <select name="period_label" required defaultValue="">
+          <select name="period_label" required defaultValue="" key={yearId}>
             <option value="" disabled>Select term</option>
-            {TERMS.map((term) => <option key={term} value={term}>{term}</option>)}
+            {terms.map((term) => <option key={term} value={term}>{term}</option>)}
           </select>
         </label>
+        <NoTermsHint ctx={ctx} yearId={yearId} />
         <label>Due date (optional)<input name="due_date" type="date" /></label>
       </div>
       {message && <p className={failed ? "setup-error" : "enrol-success"} role={failed ? "alert" : "status"}>{message}</p>}
@@ -97,9 +102,11 @@ function GenerateForm({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
 }
 
 function BulkBilling({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
+  const classes = useClassOptions(ctx.authFetch, ctx.tenantId, "finance");
   const current = years.find((year) => year.is_current) ?? years[0];
   const categories = useFinanceData<FeeCategory[]>(ctx, "fee-categories/");
   const [form, setForm] = useState({ year: current?.id ?? "", term: "", grade: "", due: "" });
+  const terms = useTermOptions(ctx, form.year);
   const [supplementary, setSupplementary] = useState(false);
   const [chosen, setChosen] = useState<string[]>([]);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -116,7 +123,7 @@ function BulkBilling({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
     supplementary: supplementary || undefined,
     categories: supplementary ? chosen : undefined,
   });
-  const ready = Boolean(form.year && form.term && form.grade && (!supplementary || chosen.length > 0));
+  const ready = Boolean(form.year && form.term && form.grade && classes.options?.includes(form.grade) && (!supplementary || chosen.length > 0));
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -164,20 +171,21 @@ function BulkBilling({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
       <p className="fin-note">Preview shows exactly what each student would be charged, and which optional fees are left out, before anything is created.</p>
       <div className="enrol-grid">
         <label>Academic year
-          <select value={form.year} onChange={(event) => setForm({ ...form, year: event.target.value })}>
+          <select value={form.year} onChange={(event) => setForm({ ...form, year: event.target.value, term: "" })}>
             {years.map((year) => <option key={year.id} value={year.id}>{year.name}</option>)}
           </select>
         </label>
         <label>Term
           <select value={form.term} onChange={(event) => setForm({ ...form, term: event.target.value })}>
             <option value="" disabled>Select term</option>
-            {TERMS.map((term) => <option key={term} value={term}>{term}</option>)}
+            {terms.map((term) => <option key={term} value={term}>{term}</option>)}
           </select>
         </label>
+        <NoTermsHint ctx={ctx} yearId={form.year} />
         <label>Class
-          <select value={form.grade} onChange={(event) => setForm({ ...form, grade: event.target.value })}>
+          <select value={form.grade} disabled={!classes.options} onChange={(event) => setForm({ ...form, grade: event.target.value })}>
             <option value="" disabled>Select class</option>
-            {GRADE_LEVELS.map((level) => <option key={level} value={level}>{level}</option>)}
+            <ClassOptions options={classes.options} />
           </select>
         </label>
         <label>Due date (optional)<input type="date" value={form.due} onChange={(event) => setForm({ ...form, due: event.target.value })} /></label>
@@ -199,6 +207,7 @@ function BulkBilling({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
           </fieldset>
         )}
       </div>
+      <ClassOptionsStatus options={classes.options} error={classes.error} />
       <div className="enrol-actions">
         <button type="button" className="setup-submit" disabled={busy || !ready} onClick={() => void runPreview()}>Preview invoices</button>
       </div>
@@ -222,6 +231,7 @@ function BulkBilling({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
                   <td>
                     {row.calculation?.excluded.map((x) => <div key={x.description + x.code}><strong>{x.description}</strong>: {x.reason}</div>)}
                     {row.issues.map((issue) => <div key={issue} className="setup-error" role="alert">{issue}</div>)}
+                    {row.warnings?.map((warning) => <div key={warning} className="fin-note" role="note">{warning}</div>)}
                   </td>
                   <td className="num">{row.totals ? formatMoney(row.totals.total) : "—"}</td>
                 </tr>

@@ -4,6 +4,7 @@ export const STAFF_ROLES = [
   { value: "school_admin", label: "School administrator" },
   { value: "accountant", label: "Accountant" },
   { value: "teacher", label: "Teacher" },
+  { value: "headteacher", label: "Headteacher" },
 ] as const;
 
 export type StaffInvitation = { id: string; email: string; role: string; expires_at: string };

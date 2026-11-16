@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
-import { GRADE_LEVELS } from "../grade-levels";
+import { ClassOptions, ClassOptionsStatus, useClassOptions } from "../class-options";
 import { AdvanceRow, financeRequest, formatMoney, newIdempotencyKey } from "./finance-api";
 import FinanceShell, { FinanceContext, LoadState, useFinanceData } from "./finance-shell";
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : "Something went wrong. Try again.");
 
 function Advances({ ctx }: { ctx: FinanceContext }) {
+  const classes = useClassOptions(ctx.authFetch, ctx.tenantId, "finance");
   const [grade, setGrade] = useState("");
   const [query, setQuery] = useState("");
   const [message, setMessage] = useState("");
@@ -53,12 +54,13 @@ function Advances({ ctx }: { ctx: FinanceContext }) {
       <div className="enrol-card-head">
         <div><p className="eyebrow">ADVANCE CREDIT</p><h2>Students holding an advance</h2></div>
         <div className="fin-inline-controls">
-          <select aria-label="Filter by class" value={grade} onChange={(event) => setGrade(event.target.value)}>
+          <select aria-label="Filter by class" value={grade} disabled={!classes.options} onChange={(event) => setGrade(event.target.value)}>
             <option value="">All classes</option>
-            {GRADE_LEVELS.map((level) => <option key={level} value={level}>{level}</option>)}
+            <ClassOptions options={classes.options} />
           </select>
           <input className="roster-search" type="search" placeholder="Search student" aria-label="Search students" value={query} onChange={(event) => setQuery(event.target.value)} />
         </div>
+        <ClassOptionsStatus options={classes.options} error={classes.error} />
       </div>
       <p className="fin-note">Money received that has not been applied to an invoice or refunded. Applying it pays the student&apos;s oldest outstanding invoices first.</p>
       {message && <p className={failed ? "setup-error" : "enrol-success"} role={failed ? "alert" : "status"}>{message}</p>}

@@ -72,48 +72,17 @@ describe("SchoolDashboard", () => {
     expect(screen.getByRole("link", { name: /sign in/i })).toHaveAttribute("href", "/login");
   });
 
-  it("lets an owner see students and enroll a new one", async () => {
+  it("directs an owner to the unified student admission form", async () => {
     const authFetch = signInAs("owner");
-    authFetch.mockImplementation((path: string, init?: RequestInit) => {
-      if (init?.method === "POST") {
-        return json({ ...student, id: "s2", first_name: "Kojo", admission_number: "ASHS-2026-0002" }, 201);
-      }
-      return json([student]);
-    });
+    authFetch.mockImplementation(() => json([student]));
     render(<SchoolDashboard />);
 
     expect(await screen.findByText("Esi Boateng")).toBeInTheDocument();
-    const user = userEvent.setup();
-    expect(screen.queryByLabelText("Admission number")).not.toBeInTheDocument();
-    expect(screen.getByText(/generated automatically/)).toBeInTheDocument();
-    await user.type(screen.getByLabelText("First name"), "Kojo");
-    await user.type(screen.getByLabelText("Last name"), "Asare");
-    await user.click(screen.getByRole("button", { name: "Enroll student" }));
-
-    expect(await screen.findByText("Kojo Boateng")).toBeInTheDocument();
-    expect(await screen.findByText(/Admission number: ASHS-2026-0002/)).toBeInTheDocument();
-    const post = authFetch.mock.calls.find(([, init]) => init?.method === "POST");
-    expect(post?.[0]).toBe("/tenants/t1/students/");
-    expect(JSON.parse(post?.[1].body)).toEqual({
-      first_name: "Kojo",
-      last_name: "Asare",
-    });
-  });
-
-  it("shows backend enrollment errors", async () => {
-    const authFetch = signInAs("school_admin");
-    authFetch.mockImplementation((_path: string, init?: RequestInit) =>
-      init?.method === "POST"
-        ? json({ detail: "The admission number could not be reserved. Please try again." }, 409)
-        : json([]),
+    expect(screen.getByRole("link", { name: "Open the admission form" })).toHaveAttribute(
+      "href",
+      "/dashboard-add-student",
     );
-    render(<SchoolDashboard />);
-    await screen.findByText("No students are enrolled yet.");
-    const user = userEvent.setup();
-    await user.type(screen.getByLabelText("First name"), "Kojo");
-    await user.type(screen.getByLabelText("Last name"), "Asare");
-    await user.click(screen.getByRole("button", { name: "Enroll student" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("could not be reserved");
+    expect(screen.queryByLabelText("Grade level")).not.toBeInTheDocument();
   });
 
   it("sends a guardian invitation for a student", async () => {

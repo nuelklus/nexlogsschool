@@ -53,7 +53,9 @@ function InvoiceList({ ctx }: { ctx: FinanceContext }) {
         </div>
       </div>
       {error && <p className="setup-error" role="alert">{error}</p>}
-      <LoadState loading={invoices.loading} error={invoices.error} empty={invoices.data?.length === 0} emptyText="No invoices yet. Create the first draft under Billing." />
+      <LoadState loading={invoices.loading} error={invoices.error} empty={invoices.data?.length === 0} emptyText={ctx.canApprove
+        ? "No invoices yet. Create the first draft under Billing."
+        : "No invoices are available for your authorized campuses. Contact an owner or administrator for access."} />
       {visible.length > 0 && (
         <table className="fin-table">
           <thead><tr><th>Invoice</th><th>Student</th><th>Due</th><th className="num">Total</th><th className="num">Balance</th><th>Status</th><th /></tr></thead>

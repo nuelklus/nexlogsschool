@@ -1,10 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import AuthControls from "./auth-controls";
 import { AuthMembership, useAuth } from "./auth-provider";
+import { SchoolCalendarPanel } from "./school/calendar-panel";
+import ClassSetupPanel from "./school/class-setup-panel";
+import CampusSetupPanel from "./school/campus-setup-panel";
 import { StaffInvitePanel } from "./school/invite-panel";
 import SchoolDashboard from "./school/school-dashboard";
 import { listStudents, MANAGE_ROLES } from "./school/student-api";
@@ -49,6 +53,7 @@ function WorkspaceBody({
   const [students, setStudents] = useState<number | null>(null);
   const [studentsNote, setStudentsNote] = useState("Loading…");
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
+  const [campusVersion, setCampusVersion] = useState(0);
 
   useEffect(() => {
     let current = true;
@@ -169,6 +174,9 @@ function WorkspaceBody({
           </section>
 
           <div className="workspace-sections">
+            {MANAGE_ROLES.includes(membership.role) && <CampusSetupPanel tenantId={tenantId} authFetch={authFetch} onChanged={() => setCampusVersion((value) => value + 1)} />}
+            <SchoolCalendarPanel key={`cal-${tenantId}`} tenantId={tenantId} authFetch={authFetch} />
+            <ClassSetupPanel key={`classes-${tenantId}`} tenantId={tenantId} authFetch={authFetch} campusVersion={campusVersion} />
             <div id="staff"><StaffInvitePanel key={tenantId} tenantId={tenantId} authFetch={authFetch} /></div>
             <div id="subscription"><SubscriptionPanel key={tenantId} tenantId={tenantId} authFetch={authFetch} /></div>
           </div>
@@ -184,8 +192,17 @@ function WorkspaceBody({
 // goes straight to their role's records view.
 export default function Home() {
   const { user } = useAuth();
-  if (!user) return null;
-  const managed = user.memberships.filter((item) => MANAGE_ROLES.includes(item.role));
+  const router = useRouter();
+  const managed = user?.memberships.filter((item) => MANAGE_ROLES.includes(item.role)) ?? [];
+  // Accountants work from Finance, which carries the sidebar.
+  const isAccountant = managed.length === 0 && !!user?.memberships.some((item) => item.role === "accountant");
+  // Headteachers work from Academic Management.
+  const isHeadteacher = managed.length === 0 && !isAccountant && !!user?.memberships.some((item) => item.role === "headteacher");
+  useEffect(() => {
+    if (isAccountant) router.replace("/finance");
+    else if (isHeadteacher) router.replace("/academics");
+  }, [isAccountant, isHeadteacher, router]);
+  if (!user || isAccountant || isHeadteacher) return null;
   if (managed.length === 0) return <SchoolDashboard />;
   return <Workspace memberships={managed} />;
 }

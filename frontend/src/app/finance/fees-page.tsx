@@ -1,8 +1,8 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
-import { GRADE_LEVELS } from "../grade-levels";
+import { SchoolClassLevel, listClassLevels } from "../academics/academics-api";
 import { APPLICABILITY_LABELS, Applicability, FeeCategory, FeeSchedule, financeRequest, formatMoney } from "./finance-api";
 import FinanceShell, { FinanceContext, LoadState, StatusPill, useFinanceData } from "./finance-shell";
 
@@ -12,6 +12,8 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 const text = (data: FormData, name: string) => String(data.get(name) ?? "").trim();
 
 function Schedules({ ctx, categories, years }: { ctx: FinanceContext; categories: FeeCategory[]; years: Year[] }) {
+  const [classLevels, setClassLevels] = useState<SchoolClassLevel[] | null>(null);
+  const [classLevelError, setClassLevelError] = useState("");
   const { data, error, loading, reload } = useFinanceData<FeeSchedule[]>(ctx, "fee-schedules/");
   const [message, setMessage] = useState("");
   const [failed, setFailed] = useState(false);
@@ -20,6 +22,24 @@ function Schedules({ ctx, categories, years }: { ctx: FinanceContext; categories
   const [basis, setBasis] = useState("fixed");
   const [conditionType, setConditionType] = useState("");
   const serviceCategories = categories.filter((c) => c.is_active);
+
+  useEffect(() => {
+    let active = true;
+    listClassLevels(ctx.authFetch, ctx.tenantId)
+      .then((levels) => {
+        if (active) {
+          setClassLevels(levels.filter((level) => level.is_active));
+          setClassLevelError("");
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setClassLevels([]);
+          setClassLevelError(error instanceof Error ? error.message : "Class levels could not be loaded.");
+        }
+      });
+    return () => { active = false; };
+  }, [ctx.authFetch, ctx.tenantId]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -33,7 +53,7 @@ function Schedules({ ctx, categories, years }: { ctx: FinanceContext; categories
         body: {
           academic_year: text(values, "academic_year"),
           category: text(values, "category"),
-          grade_level: text(values, "grade_level"),
+          class_level: text(values, "class_level") || undefined,
           amount: text(values, "amount"),
           effective_from: text(values, "effective_from"),
           effective_to: text(values, "effective_to"),
@@ -89,10 +109,12 @@ function Schedules({ ctx, categories, years }: { ctx: FinanceContext; categories
               {categories.filter((c) => c.is_active).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </label>
-          <label>Class
-            <select name="grade_level" defaultValue="">
-              <option value="">All classes</option>
-              {GRADE_LEVELS.map((level) => <option key={level} value={level}>{level}</option>)}
+          <label>Class level
+            <select name="class_level" defaultValue="">
+              <option value="">All class levels</option>
+              {classLevels?.map((level) => (
+                <option key={level.id} value={level.id}>{level.display_name}</option>
+              ))}
             </select>
           </label>
           <label>Amount (GHS){basis === "per_unit" ? " per unit" : ""}<input name="amount" inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,2})?" required placeholder="0.00" /></label>
@@ -139,6 +161,8 @@ function Schedules({ ctx, categories, years }: { ctx: FinanceContext; categories
           <label>Effective from<input name="effective_from" type="date" required /></label>
           <label>Effective to (optional)<input name="effective_to" type="date" /></label>
         </div>
+        <p className="fin-note">New class-specific schedules follow the configured class level for the selected academic year. Existing text-based schedules remain supported for compatibility.</p>
+        {classLevelError && <p className="setup-error" role="alert">{classLevelError}</p>}
         {message && <p className={failed ? "setup-error" : "enrol-success"} role={failed ? "alert" : "status"}>{message}</p>}
         <div className="enrol-actions"><button className="setup-submit" type="submit" disabled={busy}>{busy ? "Saving…" : "Save fee schedule"}</button></div>
       </form>
@@ -152,7 +176,7 @@ function Schedules({ ctx, categories, years }: { ctx: FinanceContext; categories
               {data.map((schedule) => (
                 <tr key={schedule.id}>
                   <td>{schedule.category_name}</td>
-                  <td>{schedule.grade_level || "All classes"}</td>
+                  <td>{schedule.class_level_name || schedule.grade_level || "All classes"}</td>
                   <td>
                     {APPLICABILITY_LABELS[schedule.applicability] ?? schedule.applicability}
                     {schedule.condition_type && <small>{schedule.condition_type.replaceAll("_", " ")}{schedule.condition_value ? `: ${schedule.condition_value}` : ""}</small>}

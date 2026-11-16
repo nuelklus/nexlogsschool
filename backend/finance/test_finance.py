@@ -487,6 +487,58 @@ class PaymentTests(FinanceBase):
 
 
 class ReportTests(FinanceBase):
+    def test_collection_breakdown_uses_invoice_snapshots_and_separates_advance_and_refund(self):
+        self.schedule("tuition", "1000.00")
+        first = self.issued_invoice(period="Term 1")
+        second_campus = Campus.objects.create(tenant=self.tenant, name="Second", code="SECOND")
+        self.student.grade_level = "JHS 2"
+        self.student.campus = second_campus
+        self.student.save(update_fields=("grade_level", "campus"))
+        second = self.issued_invoice(period="Term 2")
+        response = self.pay("800.00", allocations=[
+            {"invoice": first["id"], "amount": "300.00"},
+            {"invoice": second["id"], "amount": "200.00"},
+        ])
+        self.assertEqual(response.status_code, 201, response.data)
+        refunded = self.client.post(
+            f"{self.base}/payments/{response.data['id']}/refund/",
+            {"amount": "100.00", "reason": "Refund"}, format="json",
+        )
+        self.assertEqual(refunded.status_code, 201, refunded.data)
+        self.student.grade_level = "JHS 3"
+        self.student.campus = None
+        self.student.save(update_fields=("grade_level", "campus"))
+        report = self.client.get(f"{self.base}/reports/summary/").data
+        self.assertEqual(report["total_collected"], "800.00")
+        self.assertEqual(
+            {row["grade_level"]: row["amount"] for row in report["collections_by_class"]},
+            {"JHS 1": "300.00", "JHS 2": "200.00"},
+        )
+        self.assertEqual(
+            {row["campus"]: row["amount"] for row in report["collections_by_campus"]},
+            {"Main": "300.00", "Second": "200.00"},
+        )
+        self.assertEqual(report["collections_unallocated"], "200.00")
+        self.assertEqual(report["collections_refunded_unallocated"], "100.00")
+        self.assertIn("current allocations", report["basis"]["collection_breakdown"])
+
+    def test_collection_breakdown_updates_when_advance_is_later_allocated(self):
+        self.schedule("tuition", "1000.00")
+        invoice = self.issued_invoice()
+        payment = self.pay("400.00")
+        self.assertEqual(payment.status_code, 201, payment.data)
+        report = self.client.get(f"{self.base}/reports/summary/").data
+        self.assertEqual(report["collections_by_class"], [])
+        self.assertEqual(report["collections_unallocated"], "400.00")
+        allocated = self.client.post(f"{self.base}/payments/{payment.data['id']}/allocate/", {
+            "allocations": [{"invoice": invoice["id"], "amount": "150.00"}],
+        }, format="json")
+        self.assertEqual(allocated.status_code, 200, allocated.data)
+        report = self.client.get(f"{self.base}/reports/summary/").data
+        self.assertEqual(report["collections_by_class"], [{"grade_level": "JHS 1", "amount": "150.00"}])
+        self.assertEqual(report["collections_unallocated"], "250.00")
+        self.assertEqual(report["total_collected"], "400.00")
+
     def test_summary_statement_and_outstanding(self):
         self.schedule("tuition", "1000.00")
         self.overdue_invoice()
@@ -570,10 +622,10 @@ class PermissionTests(FinanceBase):
         ):
             self.assertEqual(client.post(f"{self.base}/{path}", body, format="json").status_code, 404, path)
 
-    def test_accountant_can_record_payments_and_issue(self):
+    def test_accountant_needs_a_campus_grant_and_schoolwide_reports_are_blocked(self):
         client = self.as_user(self.accountant)
-        self.assertEqual(client.get(f"{self.base}/reports/summary/").status_code, 200)
-        self.assertEqual(client.post(f"{self.base}/invoices/{self.draft['id']}/issue/", format="json").status_code, 200)
+        self.assertEqual(client.get(f"{self.base}/reports/summary/").status_code, 403)
+        self.assertEqual(client.post(f"{self.base}/invoices/{self.draft['id']}/issue/", format="json").status_code, 404)
 
     def test_school_admin_can_approve(self):
         client = self.as_user(self.admin)

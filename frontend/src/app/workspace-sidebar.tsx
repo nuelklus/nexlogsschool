@@ -4,7 +4,7 @@ import Link from "next/link";
 
 import type { AuthMembership } from "./auth-provider";
 
-export type SidebarPage = "overview" | "students" | "finance" | "staff" | "subscription";
+export type SidebarPage = "overview" | "students" | "academics" | "finance" | "staff" | "subscription";
 
 const initials = (name: string) =>
   name
@@ -15,10 +15,14 @@ const initials = (name: string) =>
     .join("");
 
 const FINANCE_ROLES = ["owner", "school_admin", "accountant"];
+const MANAGER_ROLES = ["owner", "school_admin"];
+const MANAGER_PAGES: SidebarPage[] = ["overview", "students", "staff", "subscription"];
+const ACADEMIC_ROLES = ["owner", "school_admin", "accountant", "teacher", "headteacher"];
 
 const LINKS: { page: SidebarPage; label: string; href: string }[] = [
   { page: "overview", label: "Overview", href: "/" },
   { page: "students", label: "Students", href: "/dashboard-add-student" },
+  { page: "academics", label: "Academic Management", href: "/academics" },
   { page: "finance", label: "Finance", href: "/finance" },
   { page: "staff", label: "Staff", href: "/#staff" },
   { page: "subscription", label: "Subscription", href: "/#subscription" },
@@ -58,7 +62,11 @@ export default function WorkspaceSidebar({
         </div>
       )}
       <nav className="navigation" aria-label="Main navigation">
-        {LINKS.filter((link) => link.page !== "finance" || FINANCE_ROLES.includes(membership.role)).map((link, index) => (
+        {LINKS.filter((link) =>
+          (!MANAGER_PAGES.includes(link.page) || MANAGER_ROLES.includes(membership.role)) &&
+          (link.page !== "finance" || FINANCE_ROLES.includes(membership.role)) &&
+          (link.page !== "academics" || ACADEMIC_ROLES.includes(membership.role))
+        ).map((link, index) => (
           <Link
             key={link.page}
             className={`nav-link${link.page === active ? " active" : ""}`}

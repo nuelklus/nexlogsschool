@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -74,7 +74,11 @@ const route = (path: string) => {
   if (path.includes("academic-years/")) return json(years);
   if (path.includes("fee-categories/")) return json(categories);
   if (path.includes("fee-schedules/")) return json([]);
+  if (path.includes("academics/class-options/")) return json(["JHS 1"]);
   if (path.includes("invoices/preview/")) return json(previewBody);
+  if (path.includes("academics/terms/")) {
+    return json([{ id: "t1", academic_year: "y1", name: "Term 1", start_date: "2026-09-01", end_date: "2026-11-30", is_current: true, is_completed: false }]);
+  }
   if (path.includes("invoices/")) return json([]);
   return json([]);
 };
@@ -113,6 +117,8 @@ describe("invoice preview", () => {
     const section = await screen.findByRole("region", { name: "Bulk billing" });
     const user = userEvent.setup();
     const selects = section.querySelectorAll("select");
+    await within(section).findByRole("option", { name: "Term 1" });
+    await within(section).findByRole("option", { name: "JHS 1" });
     await user.selectOptions(selects[1], "Term 1");
     await user.selectOptions(selects[2], "JHS 1");
     await user.click(screen.getByRole("button", { name: "Preview invoices" }));

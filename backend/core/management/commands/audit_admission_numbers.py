@@ -29,7 +29,7 @@ class Command(BaseCommand):
             raise CommandError(f"No school with slug '{school_slug}'.")
 
         students = list(Student.objects.filter(tenant=tenant).order_by("created_at"))
-        blank = [s for s in students if not s.admission_number.strip()]
+        blank = [s.pk for s in students if not s.admission_number.strip()]
         padded = [s for s in students if s.admission_number.strip() and s.admission_number != s.admission_number.strip()]
         seen = {}
         for student in students:
@@ -48,12 +48,24 @@ class Command(BaseCommand):
         if not assign_blank or not blank:
             return
         operator = getpass.getuser()
-        for student in blank:
+        for student_id in blank:
             with transaction.atomic():
-                number = next_admission_number(tenant.pk, student.enrolled_on or timezone.localdate())
-                Student.objects.filter(pk=student.pk, tenant=tenant).update(admission_number=number)
+                # Match admission's tenant-row reservation lock and recheck the
+                # candidate after waiting, so a stale report cannot overwrite a
+                # number assigned by another workflow.
+                locked_tenant = Tenant.objects.select_for_update().get(pk=tenant.pk)
+                student = Student.objects.select_for_update().filter(
+                    pk=student_id, tenant=locked_tenant,
+                ).first()
+                if student is None or student.admission_number.strip():
+                    continue
+                number = next_admission_number(
+                    locked_tenant.pk, student.enrolled_on or timezone.localdate()
+                )
+                student.admission_number = number
+                student.save(update_fields=("admission_number",))
                 AuditEvent.objects.create(
-                    tenant=tenant,
+                    tenant=locked_tenant,
                     action="student.admission_number_backfilled",
                     entity_type="Student",
                     entity_id=str(student.pk),

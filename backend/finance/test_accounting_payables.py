@@ -160,7 +160,8 @@ class AccountingAndPayablesTests(FinanceBase):
             409,
         )
         self.as_user(self.admin).post(f"{self.base}/supplier-vouchers/{voucher_id}/approve/", format="json")
-        paid = self.as_user(self.accountant).post(f"{self.base}/supplier-vouchers/{voucher_id}/pay/", format="json")
+        self.assertEqual(self.as_user(self.accountant).post(f"{self.base}/supplier-vouchers/{voucher_id}/pay/", format="json").status_code, 403)
+        paid = self.client.post(f"{self.base}/supplier-vouchers/{voucher_id}/pay/", format="json")
         self.assertEqual(paid.data["status"], "paid")
         self.assertEqual(paid.data["allocations"][0]["amount"], "60.00")
         bill = self.client.get(f"{self.base}/supplier-bills/{bill_id}/").data

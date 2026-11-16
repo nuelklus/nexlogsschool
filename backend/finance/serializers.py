@@ -4,7 +4,7 @@ import uuid
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from .ledger import FinanceError, money
+from .ledger import ZERO, FinanceError, money
 from .models import Invoice
 from .reports import is_overdue
 
@@ -115,6 +115,8 @@ def schedule_out(f):
     return {
         "id": str(f.pk), "academic_year": str(f.academic_year_id), "category": str(f.category_id),
         "category_name": f.category.name, "grade_level": f.grade_level,
+        "class_level": str(f.class_level_id) if f.class_level_id else None,
+        "class_level_name": f.class_level.display_name if f.class_level_id else "",
         "campus": str(f.campus_id) if f.campus_id else None, "amount": s(f.amount),
         "effective_from": f.effective_from.isoformat(),
         "effective_to": f.effective_to.isoformat() if f.effective_to else None, "status": f.status,
@@ -143,7 +145,7 @@ def settings_out(f):
     }
 
 
-def invoice_out(i, detail=False, internal=True):
+def invoice_out(i, detail=False, internal=True, campus_scope=None):
     data = {
         "id": str(i.pk), "number": i.number, "status": i.status, "overdue": is_overdue(i),
         "student": str(i.student_id), "student_name": f"{i.student.first_name} {i.student.last_name}",
@@ -156,6 +158,20 @@ def invoice_out(i, detail=False, internal=True):
         "currency": "GHS",
     }
     if detail:
+        # Unpaid balances on this student's earlier invoices, carried onto this one; no extra ledger posting.
+        brought_forward = ZERO
+        if i.status not in (Invoice.Status.DRAFT, Invoice.Status.VOIDED):
+            earlier = Invoice.objects.filter(
+                tenant_id=i.tenant_id, student_id=i.student_id,
+                status__in=(Invoice.Status.ISSUED, Invoice.Status.PARTIALLY_PAID), created_at__lt=i.created_at,
+            )
+            if campus_scope is not None:
+                earlier = earlier.filter(campus_id__in=campus_scope)
+            brought_forward = sum((e.balance for e in earlier), ZERO)
+        data["brought_forward"] = s(brought_forward)
+        data["total_due"] = s(i.balance + brought_forward)
+        if campus_scope is not None:
+            data["brought_forward_campus_scoped"] = True
         data["lines"] = [
             {"id": str(l.pk), "kind": l.kind, "description": l.description, "amount": s(l.amount),
              "quantity": l.quantity, "unit_price": s(l.unit_price)}
@@ -219,8 +235,13 @@ def preview_out(row):
     totals = row["totals"]
     return {
         "student": str(student.pk), "student_name": f"{student.first_name} {student.last_name}",
-        "admission_number": student.admission_number, "grade_level": student.grade_level,
+        "admission_number": student.admission_number,
+        "grade_level": (
+            row["calculation"].get("class_at_term_start", student.grade_level)
+            if row["calculation"] else student.grade_level
+        ),
         "calculation": row["calculation"],
         "totals": {k: s(v) for k, v in totals.items()} if totals else None,
-        "issues": row["issues"], "can_generate": row["can_generate"],
+        "issues": row["issues"], "warnings": row.get("warnings", []),
+        "can_generate": row["can_generate"],
     }

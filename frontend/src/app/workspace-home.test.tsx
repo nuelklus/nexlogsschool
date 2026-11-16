@@ -9,6 +9,8 @@ const auth = vi.hoisted(() => ({
   value: {} as { user: AuthUser | null; isLoading: boolean; authFetch: ReturnType<typeof vi.fn> },
 }));
 
+const replace = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace }) }));
 vi.mock("./auth-provider", () => ({ useAuth: () => auth.value }));
 
 const student = {
@@ -70,15 +72,23 @@ describe("WorkspaceHome", () => {
     expect(await screen.findByText("1 enrolled")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Invite staff" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Subscription" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "School class setup" })).toBeInTheDocument();
     expect(await screen.findByText("Free trial", { selector: "strong" })).toBeInTheDocument();
   });
 
-  it.each(["accountant", "teacher"])("does not show the workspace to a %s", async (role) => {
+  it("sends an accountant to Finance", () => {
+    signInAs("accountant");
+    render(<WorkspaceHome />);
+    expect(replace).toHaveBeenCalledWith("/finance");
+  });
+
+  it.each(["teacher"])("does not show the workspace to a %s", async (role) => {
     signInAs(role);
     render(<WorkspaceHome />);
 
     expect(await screen.findByText("Esi Boateng")).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Invite staff" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "School class setup" })).not.toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Main navigation" })).not.toBeInTheDocument();
   });
 

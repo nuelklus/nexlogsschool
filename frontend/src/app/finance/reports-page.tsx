@@ -2,6 +2,7 @@
 
 import { TrialBalance, formatMoney } from "./finance-api";
 import FinanceShell, { FinanceContext, LoadState, useFinanceData } from "./finance-shell";
+import LegacyAttributionReconciliation from "./legacy-attribution-reconciliation";
 
 function TrialBalanceReport({ ctx }: { ctx: FinanceContext }) {
   const { data, error, loading } = useFinanceData<TrialBalance>(ctx, "reports/trial-balance/");
@@ -29,8 +30,11 @@ function TrialBalanceReport({ ctx }: { ctx: FinanceContext }) {
 
 export default function FinanceReportsPage() {
   return (
-    <FinanceShell eyebrow="REPORTING" title="Reports" active="/finance/reports" description="Review ledger balances and confirm that all posted entries remain in balance.">
-      {(ctx: FinanceContext) => <TrialBalanceReport ctx={ctx} />}
+    <FinanceShell eyebrow="REPORTING" title="Reports" active="/finance/reports" description="Review financial statements and investigate legacy record attribution.">
+      {(ctx: FinanceContext) => <div className="fin-stack">
+        <TrialBalanceReport ctx={ctx} />
+        <LegacyAttributionReconciliation ctx={ctx} />
+      </div>}
     </FinanceShell>
   );
 }

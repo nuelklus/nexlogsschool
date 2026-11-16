@@ -59,6 +59,7 @@ function Dashboard({ ctx }: { ctx: FinanceContext }) {
             <Breakdown title="Collections by class" rows={data.collections_by_class.map((r) => ({ label: r.grade_level, amount: r.amount }))} />
             <Breakdown title="Collections by date" rows={data.collections_by_date.map((r) => ({ label: r.date, amount: r.amount }))} />
           </div>
+          <p className="fin-note">Class and campus totals follow invoice snapshots and current allocations. For payments in this period, unallocated: <Money value={data.collections_unallocated} />; refunded from unallocated: <Money value={data.collections_refunded_unallocated} />. Later allocations can change these breakdowns.</p>
         </>
       )}
     </>

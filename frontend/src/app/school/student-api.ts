@@ -6,6 +6,8 @@ export type Student = {
   date_of_birth: string | null;
   gender: string;
   grade_level: string;
+  current_class?: string | null;
+  campus?: string | null;
   status: "active" | "withdrawn" | "graduated";
   enrolled_on: string;
   portal_account: boolean;
@@ -18,8 +20,13 @@ export type NewStudent = {
   last_name: string;
   date_of_birth?: string;
   gender?: string;
-  grade_level?: string;
+  enrolled_on: string;
+  initial_academic_year: string;
+  initial_school_class: string;
+  campus?: string;
 };
+
+export type Campus = { id: string; code: string; name: string; status: string };
 
 export type AuthFetch = (path: string, init?: RequestInit) => Promise<Response>;
 
@@ -64,6 +71,8 @@ export function isStudent(value: unknown): value is Student {
     (v.date_of_birth === null || typeof v.date_of_birth === "string") &&
     typeof v.gender === "string" &&
     typeof v.grade_level === "string" &&
+    (v.current_class === undefined || v.current_class === null || typeof v.current_class === "string") &&
+    (v.campus === undefined || v.campus === null || typeof v.campus === "string") &&
     typeof v.status === "string" &&
     STATUSES.includes(v.status) &&
     typeof v.enrolled_on === "string" &&
@@ -91,6 +100,19 @@ async function parse<T>(
 
 export async function listStudents(authFetch: AuthFetch, tenantId: string): Promise<Student[]> {
   return parse(await authFetch(`/tenants/${tenantId}/students/`), isStudent);
+}
+
+export async function listCampuses(authFetch: AuthFetch, tenantId: string): Promise<Campus[]> {
+  const isCampus = (value: unknown): value is Campus => {
+    if (typeof value !== "object" || value === null) return false;
+    const campus = value as Record<string, unknown>;
+    return typeof campus.id === "string" && typeof campus.code === "string"
+      && typeof campus.name === "string" && typeof campus.status === "string";
+  };
+  return parse(
+    await authFetch(`/tenants/${tenantId}/finance/campuses/`),
+    isCampus,
+  );
 }
 
 export async function listChildren(authFetch: AuthFetch, tenantId: string): Promise<Child[]> {

@@ -1,12 +1,14 @@
 """Finance API. Tenant and role come from the authenticated membership, never from the body."""
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.http import HttpResponse
 from django.utils import timezone
-from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from academics.models import SchoolClassLevel, StudentEnrollment
 from core.enrollment import _audit, _membership
 from core.models import AcademicYear, Campus, Membership, Student, StudentGuardian
 
@@ -19,6 +21,7 @@ from .models import (
     FeeCategory,
     FeeSchedule,
     FinanceSettings,
+    FinanceCampusGrant,
     Invoice,
     Payment,
     PaymentMethod,
@@ -55,14 +58,34 @@ class FinanceView(APIView):
             return Response(body, status=exc.status)
         return super().handle_exception(exc)
 
-    def member(self, request, tenant_id, roles=FINANCE):
+    def member(self, request, tenant_id, roles=FINANCE, *, campus_scoped=False):
         membership = _membership(request.user, tenant_id, roles)
         if membership is None:
             raise NotFound()
+        if membership.role == Role.ACCOUNTANT and not campus_scoped:
+            raise PermissionDenied(
+                "This finance feature is not yet available with campus-restricted access. Contact an owner or school administrator."
+            )
         return membership
 
     def audit(self, request, tenant_id, action, entity, entity_id, **metadata):
         _audit(request, tenant_id, f"finance.{action}", entity, entity_id, metadata)
+
+    @staticmethod
+    def granted_campuses(membership, tenant_id):
+        return FinanceCampusGrant.objects.filter(
+            membership=membership, campus__tenant_id=tenant_id
+        ).values_list("campus_id", flat=True)
+
+    def lock_finance_member(self, request, tenant_id, membership):
+        locked = Membership.objects.select_for_update().filter(pk=membership.pk, tenant_id=tenant_id).first()
+        if (
+            locked is None or locked.user_id != request.user.pk
+            or locked.status != Membership.Status.ACTIVE or locked.role not in FINANCE
+            or _membership(request.user, tenant_id, FINANCE) is None
+        ):
+            raise NotFound()
+        return locked
 
     @staticmethod
     def key(request):
@@ -108,7 +131,7 @@ class SettingsView(FinanceView):
 
 class AcademicYearListView(FinanceView):
     def get(self, request, tenant_id):
-        self.member(request, tenant_id)
+        self.member(request, tenant_id, campus_scoped=True)
         years = AcademicYear.objects.filter(tenant_id=tenant_id).order_by("-start_date")
         return Response([
             {"id": str(y.pk), "name": y.name, "start_date": y.start_date.isoformat(), "end_date": y.end_date.isoformat(), "is_current": y.is_current}
@@ -137,9 +160,15 @@ class AcademicYearListView(FinanceView):
 
 class AccountListView(FinanceView):
     def get(self, request, tenant_id):
-        self.member(request, tenant_id)
+        expense_options = request.query_params.get("purpose") == "expense"
+        membership = self.member(request, tenant_id, campus_scoped=expense_options)
         ensure_ready(tenant_id)
-        return Response([out.account_out(a) for a in Account.objects.filter(tenant_id=tenant_id)])
+        accounts = Account.objects.filter(tenant_id=tenant_id)
+        if membership.role == Role.ACCOUNTANT:
+            if not self.granted_campuses(membership, tenant_id).exists():
+                return Response([])
+            accounts = accounts.filter(type=Account.Type.EXPENSE, is_active=True, is_header=False)
+        return Response([out.account_out(a) for a in accounts])
 
     def post(self, request, tenant_id):
         self.member(request, tenant_id, APPROVERS)
@@ -232,9 +261,15 @@ class AccountDetailView(FinanceView):
 
 class PaymentMethodListView(FinanceView):
     def get(self, request, tenant_id):
-        self.member(request, tenant_id)
+        purpose = request.query_params.get("purpose") == "invoice_payment"
+        membership = self.member(request, tenant_id, campus_scoped=purpose)
         ensure_ready(tenant_id)
-        return Response([out.method_out(m) for m in PaymentMethod.objects.filter(tenant_id=tenant_id)])
+        methods = PaymentMethod.objects.filter(tenant_id=tenant_id)
+        if membership.role == Role.ACCOUNTANT:
+            if not self.granted_campuses(membership, tenant_id).exists():
+                return Response([])
+            methods = methods.filter(is_active=True).exclude(kind=PaymentMethod.Kind.MOBILE_MONEY)
+        return Response([out.method_out(m) for m in methods])
 
     def post(self, request, tenant_id):
         self.member(request, tenant_id, APPROVERS)
@@ -322,6 +357,17 @@ def _schedule_fields(request, tenant_id, view, data):
     campus = None
     if data.get("campus"):
         campus = view.get_or_404(Campus, tenant_id, out.parse_uuid(data["campus"], "campus"))
+    class_level = None
+    if data.get("class_level"):
+        class_level = view.get_or_404(
+            SchoolClassLevel,
+            tenant_id,
+            out.parse_uuid(data["class_level"], "class_level"),
+            is_active=True,
+        )
+    grade_level = out.parse_text(data, "grade_level", 40, required=False)
+    if class_level and grade_level:
+        raise FinanceError("Choose a class level or a legacy class name, not both.", 400, "class_level")
     start = out.parse_date(data, "effective_from")
     end = out.parse_date(data, "effective_to", required=False)
     if end and end < start:
@@ -329,7 +375,7 @@ def _schedule_fields(request, tenant_id, view, data):
     rules = _applicability_fields(tenant_id, data)
     return {
         "academic_year": year, "category": category, "campus": campus,
-        "grade_level": out.parse_text(data, "grade_level", 40, required=False),
+        "grade_level": grade_level, "class_level": class_level,
         "amount": out.parse_money(data), "effective_from": start, "effective_to": end, **rules,
     }
 
@@ -373,7 +419,7 @@ def _applicability_fields(tenant_id, data):
 class FeeScheduleListView(FinanceView):
     def get(self, request, tenant_id):
         self.member(request, tenant_id)
-        queryset = FeeSchedule.objects.filter(tenant_id=tenant_id).select_related("category")
+        queryset = FeeSchedule.objects.filter(tenant_id=tenant_id).select_related("category", "class_level")
         if request.query_params.get("academic_year"):
             queryset = queryset.filter(academic_year_id=out.parse_uuid(request.query_params["academic_year"], "academic_year"))
         return Response([out.schedule_out(f) for f in queryset])
@@ -633,12 +679,14 @@ def _invoice_queryset(tenant_id):
 
 class InvoiceListView(FinanceView):
     def get(self, request, tenant_id):
-        membership = self.member(request, tenant_id, FINANCE + PORTAL)
+        membership = self.member(request, tenant_id, FINANCE + PORTAL, campus_scoped=True)
         queryset = _invoice_queryset(tenant_id)
         if membership.role in PORTAL:
             queryset = queryset.filter(
                 student_id__in=portal_student_ids(request.user, tenant_id, membership)
             ).exclude(status__in=(Invoice.Status.DRAFT, Invoice.Status.VOIDED))
+        elif membership.role == Role.ACCOUNTANT:
+            queryset = queryset.filter(campus_id__in=self.granted_campuses(membership, tenant_id))
         params = request.query_params
         if params.get("status") in Invoice.Status.values:
             queryset = queryset.filter(status=params["status"])
@@ -677,18 +725,63 @@ BULK_LIMIT = 300
 
 
 def _selected_students(view, tenant_id, data):
-    """Active students chosen by id, class or campus, always within this tenant."""
+    """Active students chosen by id, class or campus for the selected academic period."""
     queryset = Student.objects.filter(tenant_id=tenant_id, status=Student.Status.ACTIVE)
+    year = view.get_or_404(
+        AcademicYear, tenant_id, out.parse_uuid(data.get("academic_year"), "academic_year")
+    )
+    period_label = out.parse_text(data, "period_label", 60, required=False)
+    as_of = billing.term_start_date(tenant_id, year, period_label)
+    covering_enrollments = StudentEnrollment.objects.filter(
+        tenant_id=tenant_id,
+        school_class__academic_year=year,
+        enrolled_on__lte=as_of,
+        status__in=(StudentEnrollment.Status.ACTIVE, StudentEnrollment.Status.TRANSFERRED),
+    ).filter(Q(ended_on__isnull=True) | Q(ended_on__gte=as_of))
     ids = data.get("students")
     if ids:
         if not isinstance(ids, list):
             raise FinanceError("Students must be a list.", 400, "students")
         queryset = queryset.filter(pk__in=[out.parse_uuid(i, "students") for i in ids])
-    elif data.get("grade_level") or data.get("campus"):
+    elif data.get("grade_level") or data.get("class_level") or data.get("campus"):
         if data.get("grade_level"):
-            queryset = queryset.filter(grade_level__iexact=str(data["grade_level"]).strip())
+            class_name = str(data["grade_level"]).strip()
+            enrolled_matches = covering_enrollments.filter(
+                school_class__name__iexact=class_name
+            ).values("student_id")
+            legacy_matches = Student.objects.filter(
+                tenant_id=tenant_id, status=Student.Status.ACTIVE,
+                grade_level__iexact=class_name,
+            ).exclude(pk__in=covering_enrollments.values("student_id")).values("pk")
+            queryset = queryset.filter(Q(pk__in=enrolled_matches) | Q(pk__in=legacy_matches))
+        if data.get("class_level"):
+            level_id = out.parse_uuid(data["class_level"], "class_level")
+            if not SchoolClassLevel.objects.filter(
+                tenant_id=tenant_id, pk=level_id, is_active=True
+            ).exists():
+                raise FinanceError("Choose an active class level in this school.", 400, "class_level")
+            queryset = queryset.filter(
+                pk__in=covering_enrollments.filter(
+                    school_class__class_level_id=level_id
+                ).values("student_id")
+            )
         if data.get("campus"):
-            queryset = queryset.filter(campus_id=out.parse_uuid(data["campus"], "campus"))
+            campus_id = out.parse_uuid(data["campus"], "campus")
+            enrollment_matches = covering_enrollments.filter(
+                Q(campus_id=campus_id)
+                | Q(campus__isnull=True, school_class__campus_id=campus_id)
+                | Q(
+                    campus__isnull=True,
+                    school_class__campus__isnull=True,
+                    student__campus_id=campus_id,
+                )
+            ).values("student_id")
+            legacy_matches = Student.objects.filter(
+                tenant_id=tenant_id,
+                status=Student.Status.ACTIVE,
+                campus_id=campus_id,
+            ).exclude(pk__in=covering_enrollments.values("student_id")).values("pk")
+            queryset = queryset.filter(Q(pk__in=enrollment_matches) | Q(pk__in=legacy_matches))
     else:
         raise FinanceError("Choose students, a class or a campus.", 400, "students")
     students = list(queryset.select_related("campus").order_by("last_name", "first_name")[: BULK_LIMIT + 1])
@@ -769,23 +862,90 @@ class InvoiceIssueBatchView(FinanceView):
 
 class InvoiceDetailView(FinanceView):
     def get(self, request, tenant_id, invoice_id):
-        membership = self.member(request, tenant_id, FINANCE + PORTAL)
+        membership = self.member(request, tenant_id, FINANCE + PORTAL, campus_scoped=True)
         invoice = self.get_or_404(Invoice, tenant_id, invoice_id)
         if membership.role in PORTAL and (
             invoice.student_id not in portal_student_ids(request.user, tenant_id, membership)
             or invoice.status in (Invoice.Status.DRAFT, Invoice.Status.VOIDED)
         ):
             raise NotFound()
-        return Response(out.invoice_out(_invoice_queryset(tenant_id).get(pk=invoice.pk), detail=True, internal=membership.role not in PORTAL))
+        scope = None
+        if membership.role == Role.ACCOUNTANT:
+            scope = self.granted_campuses(membership, tenant_id)
+            if not invoice.campus_id or not scope.filter(campus_id=invoice.campus_id).exists():
+                raise NotFound()
+        return Response(out.invoice_out(
+            _invoice_queryset(tenant_id).get(pk=invoice.pk), detail=True,
+            internal=membership.role not in PORTAL and membership.role != Role.ACCOUNTANT, campus_scope=scope,
+        ))
 
 
 class InvoiceIssueView(FinanceView):
     def post(self, request, tenant_id, invoice_id):
-        self.member(request, tenant_id, FINANCE)
-        invoice, issued = billing.issue_invoice(tenant_id, invoice_id, user=request.user)
-        if issued:
-            self.audit(request, tenant_id, "invoice_issued", "Invoice", invoice.pk, number=invoice.number, total=str(invoice.total))
-        return Response(out.invoice_out(_invoice_queryset(tenant_id).get(pk=invoice.pk), detail=True))
+        membership = self.member(request, tenant_id, FINANCE, campus_scoped=True)
+        with transaction.atomic():
+            locked = self.lock_finance_member(request, tenant_id, membership)
+            scope = None
+            if locked.role == Role.ACCOUNTANT:
+                scope = self.granted_campuses(locked, tenant_id)
+                if not Invoice.objects.filter(pk=invoice_id, tenant_id=tenant_id, campus_id__in=scope).exists():
+                    raise NotFound()
+            elif locked.role not in APPROVERS or locked.status != Membership.Status.ACTIVE:
+                raise NotFound()
+            invoice, issued = billing.issue_invoice(tenant_id, invoice_id, user=request.user)
+            if issued:
+                self.audit(request, tenant_id, "invoice_issued", "Invoice", invoice.pk, number=invoice.number, total=str(invoice.total))
+            return Response(out.invoice_out(
+                _invoice_queryset(tenant_id).get(pk=invoice.pk), detail=True,
+                internal=locked.role != Role.ACCOUNTANT, campus_scope=scope,
+            ))
+
+
+class InvoicePaymentView(FinanceView):
+    def post(self, request, tenant_id, invoice_id):
+        membership = self.member(request, tenant_id, FINANCE, campus_scoped=True)
+        data = request.data
+        amount = out.parse_money(data)
+        method_id = out.parse_uuid(data.get("method"), "method")
+        date = out.parse_date(data, "payment_date", required=False) or timezone.localdate()
+        reference = out.parse_text(data, "reference", 80, required=False)
+        payer = out.parse_text(data, "payer_name", 120, required=False)
+        key = self.key(request)
+        if not key:
+            raise FinanceError("An idempotency key is required.", 400, "idempotency_key")
+        with transaction.atomic():
+            locked = self.lock_finance_member(request, tenant_id, membership)
+            lock_finance(tenant_id)
+            invoices = Invoice.objects.select_for_update().filter(tenant_id=tenant_id, pk=invoice_id)
+            if locked.role == Role.ACCOUNTANT:
+                invoices = invoices.filter(campus_id__in=self.granted_campuses(locked, tenant_id))
+            invoice = invoices.first()
+            if invoice is None:
+                raise NotFound()
+            method = PaymentMethod.objects.filter(tenant_id=tenant_id, pk=method_id, is_active=True).first()
+            if method is None:
+                raise NotFound()
+            if method.kind == PaymentMethod.Kind.MOBILE_MONEY:
+                raise FinanceError("Mobile-money payments must be recorded and confirmed by an administrator.", 400, "method")
+            prior = Payment.objects.filter(tenant_id=tenant_id, idempotency_key=key).first()
+            if prior:
+                allocations = list(prior.allocations.values_list("invoice_id", "amount"))
+                if (
+                    prior.student_id != invoice.student_id or prior.method_id != method.pk
+                    or prior.amount != amount or prior.payment_date != date or prior.reference != reference
+                    or prior.payer_name != payer or allocations != [(invoice.pk, amount)]
+                    or prior.status != Payment.Status.CONFIRMED
+                ):
+                    raise FinanceError("That idempotency key was already used for a different payment.", 409)
+            payment, created = payments.record_payment(
+                tenant_id, student_id=invoice.student_id, method_id=method_id, amount=amount,
+                payment_date=date, reference=reference, payer_name=payer, idempotency_key=key,
+                allocations=[{"invoice": invoice.pk, "amount": amount}], user=request.user,
+            )
+            if created:
+                self.audit(request, tenant_id, "payment_recorded", "Payment", payment.pk,
+                           amount=str(payment.amount), status=payment.status)
+            return Response(out.payment_out(_payment_queryset(tenant_id).get(pk=payment.pk)), status=201 if created else 200)
 
 
 class InvoiceVoidView(FinanceView):
@@ -856,35 +1016,52 @@ class PaymentListView(FinanceView):
 
 
 def _visible_payment(view, request, tenant_id, payment_id):
-    membership = view.member(request, tenant_id, FINANCE + PORTAL)
+    membership = view.member(request, tenant_id, FINANCE + PORTAL, campus_scoped=True)
     payment = view.get_or_404(Payment, tenant_id, payment_id)
     if membership.role in PORTAL and (
         payment.student_id not in portal_student_ids(request.user, tenant_id, membership)
         or payment.status != Payment.Status.CONFIRMED
     ):
         raise NotFound()
-    return _payment_queryset(tenant_id).get(pk=payment.pk)
+    grades = None
+    if membership.role == Role.ACCOUNTANT:
+        scope = set(view.granted_campuses(membership, tenant_id))
+        allocations = list(payment.allocations.select_related("invoice"))
+        if (
+            payment.status != Payment.Status.CONFIRMED or payment.refunded_total
+            or not allocations or payment.allocated_total != payment.amount
+            or sum((allocation.amount for allocation in allocations), billing.ZERO) != payment.amount
+            or any(
+                allocation.tenant_id != tenant_id or allocation.invoice.tenant_id != tenant_id
+                or allocation.invoice.student_id != payment.student_id or allocation.invoice.campus_id not in scope
+                for allocation in allocations
+            )
+        ):
+            raise NotFound()
+        grades = ", ".join(sorted({allocation.invoice.grade_level for allocation in allocations if allocation.invoice.grade_level}))
+    return _payment_queryset(tenant_id).get(pk=payment.pk), grades
 
 
 class PaymentDetailView(FinanceView):
     def get(self, request, tenant_id, payment_id):
-        return Response(out.payment_out(_visible_payment(self, request, tenant_id, payment_id)))
+        payment, _ = _visible_payment(self, request, tenant_id, payment_id)
+        return Response(out.payment_out(payment))
 
 
 class PaymentReceiptView(FinanceView):
     def get(self, request, tenant_id, payment_id):
-        payment = _visible_payment(self, request, tenant_id, payment_id)
+        payment, grades = _visible_payment(self, request, tenant_id, payment_id)
         if not payment.receipt_number:
             raise NotFound()
-        return Response(receipts.receipt_data(payment))
+        return Response(receipts.receipt_data(payment, grade_level=grades))
 
 
 class PaymentReceiptPdfView(FinanceView):
     def get(self, request, tenant_id, payment_id):
-        payment = _visible_payment(self, request, tenant_id, payment_id)
+        payment, grades = _visible_payment(self, request, tenant_id, payment_id)
         if not payment.receipt_number:
             raise NotFound()
-        response = HttpResponse(receipts.render_receipt_pdf(payment), content_type="application/pdf")
+        response = HttpResponse(receipts.render_receipt_pdf(payment, grade_level=grades), content_type="application/pdf")
         response["Content-Disposition"] = f'inline; filename="{payment.receipt_number}.pdf"'
         return response
 
@@ -947,6 +1124,15 @@ class PaymentRefundView(FinanceView):
         )
 
 
+class StudentSearchView(FinanceView):
+    def get(self, request, tenant_id):
+        self.member(request, tenant_id, FINANCE)
+        query = request.query_params.get("q", "").strip()
+        if not query:
+            return Response([])
+        return Response(reports.student_search(tenant_id, query[:80]))
+
+
 class StatementView(FinanceView):
     def get(self, request, tenant_id, student_id):
         membership = self.member(request, tenant_id, FINANCE + PORTAL)
@@ -968,14 +1154,20 @@ class SummaryReportView(FinanceView):
 
 class OutstandingReportView(FinanceView):
     def get(self, request, tenant_id):
-        self.member(request, tenant_id)
+        membership = self.member(request, tenant_id, campus_scoped=True)
         params = request.query_params
+        campus_id = out.parse_uuid(params["campus"], "campus") if params.get("campus") else None
+        scope = self.granted_campuses(membership, tenant_id) if membership.role == Role.ACCOUNTANT else None
+        if campus_id and scope is not None and not scope.filter(campus_id=campus_id).exists():
+            raise NotFound()
         return Response(
             reports.outstanding_by_student(
                 tenant_id,
                 overdue_only=params.get("overdue") == "true",
-                campus_id=out.parse_uuid(params["campus"], "campus") if params.get("campus") else None,
+                campus_id=campus_id,
                 grade_level=params.get("grade_level") or None,
+                campus_scope=scope,
+                snapshot_classes=scope is not None,
             )
         )
 
@@ -1003,6 +1195,19 @@ class TrialBalanceView(FinanceView):
     def get(self, request, tenant_id):
         self.member(request, tenant_id, APPROVERS + (Role.ACCOUNTANT,))
         return Response(reports.trial_balance(tenant_id))
+
+
+class LegacyAttributionReconciliationView(FinanceView):
+    def get(self, request, tenant_id):
+        self.member(request, tenant_id, APPROVERS)
+        try:
+            limit = int(request.query_params.get("limit", 50))
+            offset = int(request.query_params.get("offset", 0))
+        except (TypeError, ValueError):
+            raise FinanceError("Limit and offset must be whole numbers.", 400)
+        if not 1 <= limit <= 100 or offset < 0:
+            raise FinanceError("Use a limit from 1 to 100 and a non-negative offset.", 400)
+        return Response(reports.legacy_attribution_reconciliation(tenant_id, limit=limit, offset=offset))
 
 
 class ReminderView(FinanceView):

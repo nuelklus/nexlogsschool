@@ -1,7 +1,7 @@
 import hashlib
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from datetime import timezone as dt_timezone
 from io import StringIO
 from threading import Barrier, Event, Thread
@@ -19,7 +19,9 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from academics.models import SchoolClass, StudentEnrollment
 from .models import (
+    AcademicYear,
     AuditEvent,
     Membership,
     MembershipInvitation,
@@ -656,6 +658,13 @@ class EnrollmentAndGuardianTests(TestCase):
         self.teacher = self.member("teacher@northstar.example", Membership.Role.TEACHER)
         self.base = f"/api/tenants/{self.tenant.pk}"
         self.client.force_authenticate(user=self.owner)
+        self.year = AcademicYear.objects.create(
+            tenant=self.tenant, name="2026/2027", start_date=date(2026, 1, 1),
+            end_date=date(2027, 12, 31), is_current=True,
+        )
+        self.school_class = SchoolClass.objects.create(
+            tenant=self.tenant, academic_year=self.year, name="Basic 1"
+        )
 
     def member(self, email, role, tenant=None):
         user = User.objects.create_user(
@@ -670,7 +679,11 @@ class EnrollmentAndGuardianTests(TestCase):
         # `number` is accepted for old call sites but ignored: the server generates it.
         response = self.client.post(
             f"{self.base}/students/",
-            {"first_name": first, "last_name": last},
+            {
+                "first_name": first, "last_name": last, "enrolled_on": "2026-09-01",
+                "initial_academic_year": str(self.year.pk),
+                "initial_school_class": str(self.school_class.pk),
+            },
             format="json",
         )
         self.assertEqual(response.status_code, 201, response.data)
@@ -690,12 +703,18 @@ class EnrollmentAndGuardianTests(TestCase):
         self.enroll()
         second = self.client.post(
             f"{self.base}/students/",
-            {"admission_number": "A-001", "first_name": "Kojo", "last_name": "Asare"},
+            {
+                "admission_number": "A-001", "first_name": "Kojo", "last_name": "Asare",
+                "enrolled_on": "2026-09-01",
+                "initial_academic_year": str(self.year.pk),
+                "initial_school_class": str(self.school_class.pk),
+            },
             format="json",
         )
         self.assertEqual(second.status_code, 201)
         self.assertNotEqual(second.data["admission_number"], "A-001")
         self.assertEqual(Student.objects.count(), 2)
+        self.assertEqual(StudentEnrollment.objects.count(), 2)
         self.assertTrue(AuditEvent.objects.filter(action="student.enrolled").exists())
 
     def test_teacher_can_read_but_not_enroll(self):

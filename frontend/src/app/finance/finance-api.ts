@@ -23,6 +23,9 @@ export type Invoice = {
   amount_paid: string;
   credited_total: string;
   balance: string;
+  brought_forward?: string;
+  brought_forward_campus_scoped?: boolean;
+  total_due?: string;
   calculation?: BillingCalculation | null;
   lines?: { id: string; kind: string; description: string; amount: string; quantity: number | null; unit_price: string | null }[];
   payments?: { payment: string; receipt_number: string; amount: string; date: string }[];
@@ -71,6 +74,8 @@ export type Summary = {
   overdue_balance: string;
   overdue_invoices: number;
   student_advances_held: string;
+  collections_unallocated: string;
+  collections_refunded_unallocated: string;
   collections_by_method: { method: string; amount: string }[];
   collections_by_campus: { campus: string; amount: string }[];
   collections_by_class: { grade_level: string; amount: string }[];
@@ -132,6 +137,8 @@ export type FeeSchedule = {
   category: string;
   category_name: string;
   grade_level: string;
+  class_level: string | null;
+  class_level_name: string;
   amount: string;
   effective_from: string;
   effective_to: string | null;
@@ -192,6 +199,15 @@ export type Adjustment = {
 
 export type BillingCalculation = {
   calculated_on: string;
+  class_at_term_start?: string;
+  academic_enrollment?: {
+    id: string;
+    school_class: string;
+    class_level: string | null;
+    enrolled_on: string;
+    as_of: string;
+  } | null;
+  warnings?: string[];
   fees: { description: string; amount: string; applicability: string; quantity: number | null; unit_price: string | null }[];
   charges: { description: string; amount: string }[];
   discounts: { description: string; amount: string }[];
@@ -206,6 +222,7 @@ export type PreviewRow = {
   calculation: BillingCalculation | null;
   totals: { subtotal: string; discount_total: string; total: string } | null;
   issues: string[];
+  warnings?: string[];
   can_generate: boolean;
 };
 
@@ -425,7 +442,7 @@ export async function financeRequest<T>(
   authFetch: AuthFetch,
   tenantId: string,
   path: string,
-  init: { method?: "GET" | "POST" | "PATCH"; body?: unknown; idempotencyKey?: string } = {},
+  init: { method?: "GET" | "POST" | "PUT" | "PATCH"; body?: unknown; idempotencyKey?: string } = {},
 ): Promise<T> {
   const headers: Record<string, string> = {};
   let body: BodyInit | undefined;

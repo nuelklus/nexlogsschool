@@ -4,10 +4,61 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { FormEvent, useState } from "react";
 
-import { Invoice, financeRequest, formatMoney, newIdempotencyKey } from "./finance-api";
+import { Invoice, Payment, PaymentMethod, financeRequest, formatMoney, newIdempotencyKey } from "./finance-api";
 import FinanceShell, { FinanceContext, LoadState, StatusPill, useFinanceData } from "./finance-shell";
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : "Something went wrong. Try again.");
+
+function CampusPayment({ ctx, invoice, onSaved }: { ctx: FinanceContext; invoice: Invoice; onSaved: () => void }) {
+  const methods = useFinanceData<PaymentMethod[]>(ctx, "payment-methods/?purpose=invoice_payment");
+  const [key, setKey] = useState(newIdempotencyKey);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [failed, setFailed] = useState(false);
+  const [paymentId, setPaymentId] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    const form = event.currentTarget;
+    const fields = new FormData(form);
+    setBusy(true);
+    try {
+      const payment = await financeRequest<Payment>(ctx.authFetch, ctx.tenantId, `invoices/${invoice.id}/payments/`, {
+        method: "POST", idempotencyKey: key, body: {
+          method: fields.get("method"), amount: fields.get("amount"),
+          reference: fields.get("reference"), payer_name: fields.get("payer_name"),
+        },
+      });
+      setFailed(false);
+      setMessage(`Payment confirmed. Receipt ${payment.receipt_number}.`);
+      setPaymentId(payment.id);
+      setKey(newIdempotencyKey());
+      form.reset();
+      onSaved();
+    } catch (caught) {
+      setFailed(true);
+      setPaymentId("");
+      setMessage(errorText(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <form className="fin-inline no-print" onSubmit={(event) => void submit(event)} aria-label="Pay this invoice">
+    <p className="fin-note">Payment is applied only to this invoice. Advances and mobile-money payments must be handled by an administrator.</p>
+    <LoadState loading={methods.loading} error={methods.error} empty={methods.data?.length === 0} emptyText="No payment methods are available." />
+    <label>Method<select name="method" required defaultValue=""><option value="">Select method</option>
+      {methods.data?.map((method) => <option key={method.id} value={method.id}>{method.name}</option>)}
+    </select></label>
+    <label>Amount (GHS)<input name="amount" inputMode="decimal" required /></label>
+    <label>Reference<input name="reference" maxLength={80} /></label>
+    <label>Paid by<input name="payer_name" maxLength={120} /></label>
+    <button className="setup-submit" disabled={busy || !methods.data?.length}>{busy ? "Saving…" : "Record payment"}</button>
+    {message && <p className={failed ? "setup-error" : "enrol-success"} role={failed ? "alert" : "status"}>{message}</p>}
+    {paymentId && <Link href={`/finance/receipts/${paymentId}`}>View receipt</Link>}
+  </form>;
+}
 
 function Detail({ ctx, id }: { ctx: FinanceContext; id: string }) {
   const { data: invoice, error, loading, reload } = useFinanceData<Invoice>(ctx, `invoices/${id}/`);
@@ -76,8 +127,20 @@ function Detail({ ctx, id }: { ctx: FinanceContext; id: string }) {
           <tr><td>Paid</td><td className="num">{formatMoney(invoice.amount_paid)}</td></tr>
           <tr><td>Credited</td><td className="num">{formatMoney(invoice.credited_total)}</td></tr>
           <tr className="strong"><td>Balance due</td><td className="num">{formatMoney(invoice.balance)}</td></tr>
+          {invoice.brought_forward && Number(invoice.brought_forward) > 0 && (
+            <>
+              <tr><td>Brought forward from earlier invoices</td><td className="num">{formatMoney(invoice.brought_forward)}</td></tr>
+              <tr className="strong"><td>Total amount due</td><td className="num">{formatMoney(invoice.total_due ?? invoice.balance)}</td></tr>
+            </>
+          )}
         </tfoot>
       </table>
+      {invoice.brought_forward_campus_scoped && (
+        <p className="fin-note">Earlier balances shown are limited to your authorized campuses and may not include the student&apos;s full balance.</p>
+      )}
+      {invoice.calculation?.warnings?.map((warning) => (
+        <p className="fin-note" role="note" key={warning}>{warning}</p>
+      ))}
       {invoice.calculation && invoice.calculation.excluded.length > 0 && (
         <section aria-label="Fees not charged" className="no-print">
           <h3>Fees not charged on this invoice</h3>
@@ -91,7 +154,7 @@ function Detail({ ctx, id }: { ctx: FinanceContext; id: string }) {
           <h3>Payments applied</h3>
           <ul className="fin-list">
             {invoice.payments.map((p) => (
-              <li key={`${p.payment}-${p.amount}`}><Link href={`/finance/receipts/${p.payment}`}>{p.receipt_number}</Link> · {p.date} · {formatMoney(p.amount)}</li>
+              <li key={`${p.payment}-${p.amount}`}>{ctx.canApprove ? <Link href={`/finance/receipts/${p.payment}`}>{p.receipt_number}</Link> : p.receipt_number} · {p.date} · {formatMoney(p.amount)}</li>
             ))}
           </ul>
         </section>
@@ -106,7 +169,7 @@ function Detail({ ctx, id }: { ctx: FinanceContext; id: string }) {
       )}
       {message && <p className="setup-error" role="alert">{message}</p>}
       <div className="enrol-actions no-print">
-        <Link className="auth-signout" href={`/finance/statements/${invoice.student}`}>Student statement</Link>
+        {ctx.canApprove && <Link className="auth-signout" href={`/finance/statements/${invoice.student}`}>Student statement</Link>}
         <button type="button" className="auth-signout" onClick={() => window.print()}>Print</button>
         {invoice.status === "draft" && <button type="button" className="setup-submit" onClick={() => void act(`invoices/${id}/issue/`)}>Issue invoice</button>}
         {ctx.canApprove && invoice.status !== "voided" && invoice.amount_paid === "0.00" && invoice.credited_total === "0.00" && (
@@ -126,6 +189,7 @@ function Detail({ ctx, id }: { ctx: FinanceContext; id: string }) {
           <button className="setup-submit" type="submit">Raise credit note</button>
         </form>
       )}
+      {!ctx.canApprove && open && <CampusPayment ctx={ctx} invoice={invoice} onSaved={reload} />}
     </article>
   );
 }

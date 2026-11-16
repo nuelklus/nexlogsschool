@@ -10,12 +10,14 @@ from django.db.migrations.executor import MigrationExecutor
 from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient
 
+from academics.models import SchoolClass, StudentEnrollment
 from .admission_numbers import next_admission_number, validate_config
 from .models import (
     AcademicYear,
     AdmissionSequence,
     AdmissionSettings,
     AuditEvent,
+    Campus,
     Membership,
     Student,
     Tenant,
@@ -42,6 +44,18 @@ class AdmissionNumberTestBase(TestCase):
         self.admin = make_user(self.tenant, "admin@a.example", Membership.Role.SCHOOL_ADMIN)
         self.client.force_authenticate(user=self.owner)
         self.base = f"/api/tenants/{self.tenant.pk}"
+        self.year, self.school_class = self.create_academic_context(self.tenant)
+
+    @staticmethod
+    def create_academic_context(tenant):
+        year = AcademicYear.objects.create(
+            tenant=tenant, name="2026/2027", start_date=date(2026, 9, 1),
+            end_date=date(2027, 7, 31), is_current=True,
+        )
+        school_class = SchoolClass.objects.create(
+            tenant=tenant, academic_year=year, name="Basic 1"
+        )
+        return year, school_class
 
     def configure(self, **values):
         defaults = {"prefix": "ASHS"}
@@ -49,12 +63,104 @@ class AdmissionNumberTestBase(TestCase):
         AdmissionSettings.objects.update_or_create(tenant=self.tenant, defaults=defaults)
 
     def admit(self, first="Esi", last="Boateng", client=None, **extra):
+        data = {
+            "initial_academic_year": str(self.year.pk),
+            "initial_school_class": str(self.school_class.pk),
+            "enrolled_on": "2026-09-01",
+            **extra,
+        }
         return (client or self.client).post(
-            f"{self.base}/students/", {"first_name": first, "last_name": last, **extra}, format="json"
+            f"{self.base}/students/", {"first_name": first, "last_name": last, **data}, format="json"
         )
 
 
 class GenerationTests(AdmissionNumberTestBase):
+    def test_admission_creates_the_student_and_initial_enrollment_together(self):
+        campus = Campus.objects.create(tenant=self.tenant, name="Main", code="MAIN")
+        self.school_class.campus = campus
+        self.school_class.save(update_fields=("campus",))
+        response = self.admit(first="Ama", last="Mensah")
+
+        self.assertEqual(response.status_code, 201, response.data)
+        student = Student.objects.get(pk=response.data["id"])
+        enrollment = StudentEnrollment.objects.get(student=student)
+        self.assertEqual(enrollment.tenant_id, self.tenant.pk)
+        self.assertEqual(enrollment.school_class_id, self.school_class.pk)
+        self.assertEqual(enrollment.campus_id, campus.pk)
+        self.assertEqual(enrollment.enrolled_on, date(2026, 9, 1))
+        self.assertEqual(response.data["grade_level"], self.school_class.name)
+        self.assertEqual(response.data["campus"], str(campus.pk))
+        self.assertEqual(response.data["current_class"], str(self.school_class.pk))
+
+    def test_student_list_current_class_is_from_current_year_enrollment(self):
+        response = self.admit()
+        self.assertEqual(response.status_code, 201, response.data)
+        student = Student.objects.get(pk=response.data["id"])
+        later = AcademicYear.objects.create(
+            tenant=self.tenant, name="2027/2028", start_date=date(2027, 9, 1),
+            end_date=date(2028, 7, 31),
+        )
+        next_class = SchoolClass.objects.create(tenant=self.tenant, academic_year=later, name="Basic 2")
+        StudentEnrollment.objects.create(
+            tenant=self.tenant, student=student, school_class=next_class, enrolled_on=later.start_date,
+        )
+        rows = self.client.get(f"{self.base}/students/").data
+        self.assertEqual(rows[0]["current_class"], str(self.school_class.pk))
+        AcademicYear.objects.filter(pk=self.year.pk).update(is_current=False)
+        AcademicYear.objects.filter(pk=later.pk).update(is_current=True)
+        rows = self.client.get(f"{self.base}/students/").data
+        self.assertEqual(rows[0]["current_class"], str(next_class.pk))
+        StudentEnrollment.objects.filter(student=student, school_class=next_class).update(status="transferred")
+        rows = self.client.get(f"{self.base}/students/").data
+        self.assertIsNone(rows[0]["current_class"])
+
+    def test_student_list_does_not_guess_between_multiple_active_classes(self):
+        response = self.admit()
+        student = Student.objects.get(pk=response.data["id"])
+        other_class = SchoolClass.objects.create(tenant=self.tenant, academic_year=self.year, name="Basic 2")
+        StudentEnrollment.objects.create(
+            tenant=self.tenant, student=student, school_class=other_class, enrolled_on=self.year.start_date,
+        )
+        response = self.client.get(f"{self.base}/students/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data[0]["current_class"])
+        AcademicYear.objects.filter(pk=self.year.pk).update(is_current=False)
+        self.assertIsNone(self.client.get(f"{self.base}/students/").data[0]["current_class"])
+
+    def test_admission_rejects_missing_or_mismatched_initial_enrollment(self):
+        missing = self.client.post(
+            f"{self.base}/students/", {"first_name": "A", "last_name": "B"}, format="json"
+        )
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(Student.objects.count(), 0)
+
+        other_year = AcademicYear.objects.create(
+            tenant=self.tenant, name="2027/2028", start_date=date(2027, 9, 1),
+            end_date=date(2028, 7, 31),
+        )
+        mismatch = self.admit(initial_academic_year=str(other_year.pk))
+        self.assertEqual(mismatch.status_code, 400)
+        self.assertEqual(Student.objects.count(), 0)
+        self.assertEqual(StudentEnrollment.objects.count(), 0)
+
+    def test_admission_rejects_cross_tenant_and_mismatched_campus_data(self):
+        other = create_tenant(name="Other", slug="other-admission", email="o@o.example", phone="3")
+        other_year, other_class = self.create_academic_context(other)
+        self.assertEqual(self.admit(initial_academic_year=str(other_year.pk)).status_code, 400)
+        self.assertEqual(self.admit(initial_school_class=str(other_class.pk)).status_code, 400)
+
+        foreign_campus = Campus.objects.create(tenant=other, name="Other campus", code="OTHER")
+        self.assertEqual(self.admit(campus=str(foreign_campus.pk)).status_code, 400)
+
+        main_campus = Campus.objects.create(tenant=self.tenant, name="Main", code="MAIN")
+        other_campus = Campus.objects.create(tenant=self.tenant, name="East", code="EAST")
+        self.school_class.campus = main_campus
+        self.school_class.save(update_fields=("campus",))
+        self.assertEqual(self.admit(campus=str(other_campus.pk)).status_code, 400)
+        self.assertEqual(self.admit(enrolled_on="2027-08-01").status_code, 400)
+        self.assertEqual(Student.objects.count(), 0)
+        self.assertEqual(StudentEnrollment.objects.count(), 0)
+
     def test_new_student_gets_a_formatted_sequential_number(self):
         self.configure(prefix="ASHS")
         numbers = [self.admit(first=f"S{i}", enrolled_on="2026-09-01").data["admission_number"] for i in range(3)]
@@ -65,11 +171,16 @@ class GenerationTests(AdmissionNumberTestBase):
         response = self.admit(enrolled_on="2026-09-01")
         self.assertEqual(response.data["admission_number"], "AHS-2026-0001")
         other = create_tenant(name="Kumasi Prep", slug="kumasi-prep", email="k@k.example", phone="2")
+        other_year, other_class = self.create_academic_context(other)
         client = APIClient()
         client.force_authenticate(user=make_user(other, "o@k.example", Membership.Role.OWNER))
         theirs = client.post(
             f"/api/tenants/{other.pk}/students/",
-            {"first_name": "A", "last_name": "B", "enrolled_on": "2026-09-01"},
+            {
+                "first_name": "A", "last_name": "B", "enrolled_on": "2026-09-01",
+                "initial_academic_year": str(other_year.pk),
+                "initial_school_class": str(other_class.pk),
+            },
             format="json",
         )
         self.assertEqual(theirs.data["admission_number"], "KP-2026-0001")
@@ -92,6 +203,8 @@ class GenerationTests(AdmissionNumberTestBase):
 
     def test_academic_year_policy_uses_the_current_academic_year(self):
         self.configure(year_policy="academic_year")
+        self.year.is_current = False
+        self.year.save(update_fields=("is_current",))
         AcademicYear.objects.create(
             tenant=self.tenant, name="2026/27", start_date=date(2026, 9, 1),
             end_date=date(2027, 7, 31), is_current=True,
@@ -100,10 +213,14 @@ class GenerationTests(AdmissionNumberTestBase):
 
     def test_academic_year_policy_falls_back_to_calendar_year(self):
         self.configure(year_policy="academic_year")
+        self.year.is_current = False
+        self.year.save(update_fields=("is_current",))
         self.assertEqual(self.admit(enrolled_on="2027-02-01").data["admission_number"], "ASHS-2027-0001")
 
     def test_other_tenants_academic_year_is_not_used(self):
         self.configure(year_policy="academic_year")
+        self.year.is_current = False
+        self.year.save(update_fields=("is_current",))
         other = create_tenant(name="Other", slug="other-ay", email="o@o.example", phone="3")
         AcademicYear.objects.create(
             tenant=other, name="2030/31", start_date=date(2030, 9, 1), end_date=date(2031, 7, 1), is_current=True
@@ -136,6 +253,7 @@ class GenerationTests(AdmissionNumberTestBase):
             with self.assertRaises(DatabaseError):
                 self.admit(first="Fails", enrolled_on="2026-09-01")
         self.assertFalse(Student.objects.filter(first_name="Fails").exists())
+        self.assertEqual(StudentEnrollment.objects.count(), 1)
         self.assertEqual(AdmissionSequence.objects.get(tenant=self.tenant).last_number, 1)
         self.assertEqual(self.admit(first="Next", enrolled_on="2026-09-01").data["admission_number"], "AHS-2026-0002")
 
@@ -160,13 +278,18 @@ class UniquenessAndTenantTests(AdmissionNumberTestBase):
 
     def test_two_tenants_with_the_same_prefix_each_start_at_one(self):
         other = create_tenant(name="Other", slug="other-p", email="o@o.example", phone="3")
+        other_year, other_class = self.create_academic_context(other)
         AdmissionSettings.objects.create(tenant=other, prefix="ASHS")
         self.configure()
         mine = self.admit(enrolled_on="2026-09-01").data["admission_number"]
         client = APIClient()
         client.force_authenticate(user=make_user(other, "o@o.example", Membership.Role.OWNER))
         theirs = client.post(
-            f"/api/tenants/{other.pk}/students/", {"first_name": "A", "last_name": "B", "enrolled_on": "2026-09-01"},
+            f"/api/tenants/{other.pk}/students/", {
+                "first_name": "A", "last_name": "B", "enrolled_on": "2026-09-01",
+                "initial_academic_year": str(other_year.pk),
+                "initial_school_class": str(other_class.pk),
+            },
             format="json",
         ).data["admission_number"]
         self.assertEqual(mine, theirs)
@@ -373,6 +496,13 @@ class AdmissionConcurrencyTests(TransactionTestCase):
     def setUp(self):
         self.tenant = create_tenant(name="Race School", slug="race-school", email="r@r.example", phone="1")
         self.owner = make_user(self.tenant, "owner@r.example", Membership.Role.OWNER)
+        self.year = AcademicYear.objects.create(
+            tenant=self.tenant, name="2026/2027", start_date=date(2026, 9, 1),
+            end_date=date(2027, 7, 31),
+        )
+        self.school_class = SchoolClass.objects.create(
+            tenant=self.tenant, academic_year=self.year, name="Basic 1"
+        )
 
     def admit_concurrently(self, workers):
         barrier, errors, statuses = Barrier(workers), [], []
@@ -384,7 +514,11 @@ class AdmissionConcurrencyTests(TransactionTestCase):
                 barrier.wait(timeout=10)
                 response = client.post(
                     f"/api/tenants/{self.tenant.pk}/students/",
-                    {"first_name": "S", "last_name": "T", "enrolled_on": "2026-09-01"},
+                    {
+                        "first_name": "S", "last_name": "T", "enrolled_on": "2026-09-01",
+                        "initial_academic_year": str(self.year.pk),
+                        "initial_school_class": str(self.school_class.pk),
+                    },
                     format="json",
                 )
                 statuses.append(response.status_code)
@@ -408,6 +542,7 @@ class AdmissionConcurrencyTests(TransactionTestCase):
         numbers = sorted(Student.objects.filter(tenant=self.tenant).values_list("admission_number", flat=True))
         self.assertEqual(numbers, [f"RS-2026-{n:04d}" for n in range(1, 9)])
         self.assertEqual(AdmissionSequence.objects.get(tenant=self.tenant).last_number, 8)
+        self.assertEqual(StudentEnrollment.objects.filter(tenant=self.tenant).count(), 8)
 
     def test_repeated_races_never_duplicate(self):
         for _ in range(3):

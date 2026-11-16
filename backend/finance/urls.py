@@ -1,11 +1,15 @@
 from django.urls import path
 
 from . import advanced_views as a
+from . import income_views as inc
 from . import views as v
+from .campus_access import FinanceCampusGrantDetailView, FinanceCampusGrantListView
 
 base = "tenants/<uuid:tenant_id>/finance/"
 
 urlpatterns = [
+    path(base + "campus-access/", FinanceCampusGrantListView.as_view()),
+    path(base + "campus-access/<uuid:membership_id>/", FinanceCampusGrantDetailView.as_view()),
     path(base + "settings/", v.SettingsView.as_view()),
     path(base + "accounts/", v.AccountListView.as_view()),
     path(base + "accounts/<uuid:account_id>/", v.AccountDetailView.as_view()),
@@ -27,6 +31,7 @@ urlpatterns = [
     path(base + "service-usage/", v.ServiceUsageView.as_view()),
     path(base + "invoices/<uuid:invoice_id>/", v.InvoiceDetailView.as_view()),
     path(base + "invoices/<uuid:invoice_id>/issue/", v.InvoiceIssueView.as_view()),
+    path(base + "invoices/<uuid:invoice_id>/payments/", v.InvoicePaymentView.as_view()),
     path(base + "invoices/<uuid:invoice_id>/void/", v.InvoiceVoidView.as_view()),
     path(base + "invoices/<uuid:invoice_id>/credit-notes/", v.CreditNoteView.as_view()),
     path(base + "payments/", v.PaymentListView.as_view()),
@@ -38,12 +43,14 @@ urlpatterns = [
     path(base + "payments/<uuid:payment_id>/allocate/", v.PaymentAllocateView.as_view()),
     path(base + "payments/<uuid:payment_id>/reverse/", v.PaymentReverseView.as_view()),
     path(base + "payments/<uuid:payment_id>/refund/", v.PaymentRefundView.as_view()),
+    path(base + "students/search/", v.StudentSearchView.as_view()),
     path(base + "students/<uuid:student_id>/statement/", v.StatementView.as_view()),
     path(base + "reports/summary/", v.SummaryReportView.as_view()),
     path(base + "reports/outstanding/", v.OutstandingReportView.as_view()),
     path(base + "reports/advances/", v.AdvancesReportView.as_view()),
     path(base + "reports/transactions/", v.TransactionsView.as_view()),
     path(base + "reports/trial-balance/", v.TrialBalanceView.as_view()),
+    path(base + "reports/legacy-attribution-reconciliation/", v.LegacyAttributionReconciliationView.as_view()),
     path(base + "reports/accounts-payable/", a.AccountsPayableReportView.as_view()),
     path(base + "reports/accounts-payable/reconciliation/", a.AccountsPayableReconciliationView.as_view()),
     path(base + "reports/expenses/", a.ExpenseReportView.as_view()),
@@ -82,5 +89,9 @@ urlpatterns = [
     path(base + "expenses/<uuid:expense_id>/pay/", a.ExpensePaymentView.as_view()),
     path(base + "expenses/<uuid:expense_id>/reverse/", a.ExpenseReverseView.as_view()),
     path(base + "expense-payments/<uuid:payment_id>/reverse/", a.ExpensePaymentReverseView.as_view()),
+    path(base + "income-categories/", inc.IncomeCategoryListView.as_view()),
+    path(base + "other-income/", inc.OtherIncomeListView.as_view()),
+    path(base + "other-income/<uuid:income_id>/reverse/", inc.OtherIncomeReverseView.as_view()),
+    path(base + "reports/money-received/", inc.MoneyReceivedView.as_view()),
     path(base + "reminders/", v.ReminderView.as_view()),
 ]

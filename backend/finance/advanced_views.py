@@ -3,6 +3,7 @@
 import csv
 import io
 
+from django.db import transaction
 from django.http import FileResponse
 from rest_framework.exceptions import NotFound
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -184,10 +185,13 @@ class JournalRegisterView(FinanceView):
 
 class CampusDimensionListView(FinanceView):
     def get(self, request, tenant_id):
-        self.member(request, tenant_id)
+        membership = self.member(request, tenant_id, campus_scoped=True)
+        campuses = Campus.objects.filter(tenant_id=tenant_id)
+        if membership.role == "accountant":
+            campuses = campuses.filter(finance_grants__membership=membership)
         return Response([
             {"id": str(campus.pk), "code": campus.code, "name": campus.name, "status": campus.status}
-            for campus in Campus.objects.filter(tenant_id=tenant_id).order_by("name")
+            for campus in campuses.order_by("name")
         ])
 
 
@@ -529,8 +533,10 @@ class SupplierVoucherReverseView(FinanceView):
 
 class ExpenseListView(FinanceView):
     def get(self, request, tenant_id):
-        self.member(request, tenant_id)
+        membership = self.member(request, tenant_id, campus_scoped=True)
         queryset = Expense.objects.filter(tenant_id=tenant_id).select_related("expense_account")
+        if membership.role == "accountant":
+            queryset = queryset.filter(campus_id__in=self.granted_campuses(membership, tenant_id))
         if request.query_params.get("status"):
             if request.query_params["status"] not in Expense.Status.values:
                 raise FinanceError("Choose a valid expense status.", 400, "status")
@@ -538,34 +544,51 @@ class ExpenseListView(FinanceView):
         return Response([payables.expense_out(expense) for expense in queryset[:500]])
 
     def post(self, request, tenant_id):
-        self.member(request, tenant_id, FINANCE)
+        membership = self.member(request, tenant_id, FINANCE, campus_scoped=True)
         data = request.data
-        expense = payables.create_expense(
-            tenant_id,
-            payee=parse_text(data, "payee", 160),
-            description=parse_text(data, "description", 240),
-            account_id=parse_uuid(data.get("expense_account"), "expense_account"),
-            campus_id=parse_uuid(data["campus"], "campus") if data.get("campus") else None,
-            transaction_date=parse_date(data, "transaction_date"),
-            amount=parse_money(data),
-            user=request.user,
-        )
-        self.audit(request, tenant_id, "expense_created", "Expense", expense.pk, amount=str(expense.amount))
+        campus_id = parse_uuid(data["campus"], "campus") if data.get("campus") else None
+        with transaction.atomic():
+            locked = self.lock_finance_member(request, tenant_id, membership)
+            if locked.role == "accountant" and (
+                not campus_id or not self.granted_campuses(locked, tenant_id).filter(campus_id=campus_id).exists()
+            ):
+                raise NotFound()
+            expense = payables.create_expense(
+                tenant_id,
+                payee=parse_text(data, "payee", 160),
+                description=parse_text(data, "description", 240),
+                account_id=parse_uuid(data.get("expense_account"), "expense_account"),
+                campus_id=campus_id,
+                transaction_date=parse_date(data, "transaction_date"),
+                amount=parse_money(data),
+                user=request.user,
+            )
+            self.audit(request, tenant_id, "expense_created", "Expense", expense.pk, amount=str(expense.amount))
         return Response(payables.expense_out(expense), status=201)
 
 
 class ExpenseDetailView(FinanceView):
     def get(self, request, tenant_id, expense_id):
-        self.member(request, tenant_id)
-        expense = self.get_or_404(Expense, tenant_id, expense_id)
+        membership = self.member(request, tenant_id, campus_scoped=True)
+        extra = {}
+        if membership.role == "accountant":
+            extra["campus_id__in"] = self.granted_campuses(membership, tenant_id)
+        expense = self.get_or_404(Expense, tenant_id, expense_id, **extra)
         return Response(payables.expense_out(expense, detail=True))
 
 
 class ExpenseSubmitView(FinanceView):
     def post(self, request, tenant_id, expense_id):
-        self.member(request, tenant_id, FINANCE)
-        expense = payables.submit_expense(tenant_id, expense_id)
-        self.audit(request, tenant_id, "expense_submitted", "Expense", expense.pk)
+        membership = self.member(request, tenant_id, FINANCE, campus_scoped=True)
+        with transaction.atomic():
+            locked = self.lock_finance_member(request, tenant_id, membership)
+            expenses = Expense.objects.select_for_update().filter(tenant_id=tenant_id, pk=expense_id)
+            if locked.role == "accountant":
+                expenses = expenses.filter(campus_id__in=self.granted_campuses(locked, tenant_id))
+            if not expenses.exists():
+                raise NotFound()
+            expense = payables.submit_expense(tenant_id, expense_id)
+            self.audit(request, tenant_id, "expense_submitted", "Expense", expense.pk)
         return Response(payables.expense_out(expense))
 
 
@@ -650,9 +673,13 @@ class SupplierStatementView(FinanceView):
 
 class ExpenseReportView(FinanceView):
     def get(self, request, tenant_id):
-        self.member(request, tenant_id)
+        membership = self.member(request, tenant_id, campus_scoped=True)
         start, end = _range(request)
         campus_id = parse_uuid(request.query_params["campus"], "campus") if request.query_params.get("campus") else None
-        if campus_id and not Campus.objects.filter(tenant_id=tenant_id, pk=campus_id).exists():
+        scope = self.granted_campuses(membership, tenant_id) if membership.role == "accountant" else None
+        if campus_id and (
+            not Campus.objects.filter(tenant_id=tenant_id, pk=campus_id).exists()
+            or (scope is not None and not scope.filter(campus_id=campus_id).exists())
+        ):
             raise NotFound()
-        return Response(payables.expense_report(tenant_id, start=start, end=end, campus_id=campus_id))
+        return Response(payables.expense_report(tenant_id, start=start, end=end, campus_id=campus_id, campus_scope=scope))

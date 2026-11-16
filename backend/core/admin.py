@@ -20,6 +20,12 @@ class SubscriptionPlanAdmin(admin.ModelAdmin):
         "is_active",
     )
 
+    def get_readonly_fields(self, request, obj=None):
+        return ("code",) if obj else ()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
 
 @admin.register(TenantSubscription)
 class TenantSubscriptionAdmin(admin.ModelAdmin):
@@ -86,3 +92,14 @@ class TenantSubscriptionAdmin(admin.ModelAdmin):
             )
         if renewed:
             self.message_user(request, f"Renewed {len(renewed)} school(s).")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        if obj is not None:
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        return False

@@ -26,7 +26,9 @@ Copy the project to `/srv/nlschool` (`rsync` or git). **Do not copy** your local
 
 ## 2. PostgreSQL with verified TLS
 Production refuses to start with `DJANGO_DB_SSLMODE` weaker than `verify-ca` or
-`verify-full`. For a database on the same server you must enable SSL on
+`verify-full`; `disable` is rejected. Prefer `verify-full` because it also checks
+that the database certificate matches `DJANGO_DB_HOST`. For a database on the
+same server you must enable SSL on
 PostgreSQL and give Django the CA that signed its certificate:
 
 1. Create a private CA and a server certificate whose CN/SAN equals the value

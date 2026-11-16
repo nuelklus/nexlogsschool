@@ -59,6 +59,7 @@ class StaffInvitationSerializer(serializers.Serializer):
             MembershipInvitation.Role.SCHOOL_ADMIN,
             MembershipInvitation.Role.ACCOUNTANT,
             MembershipInvitation.Role.TEACHER,
+            MembershipInvitation.Role.HEADTEACHER,
         )
     )
 

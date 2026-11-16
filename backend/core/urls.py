@@ -11,6 +11,7 @@ from .auth_views import (
     VerifyEmailView,
 )
 from .billing_views import SubscriptionStatusView
+from .campuses import CampusManagementDetailView, CampusManagementView
 from .enrollment import (
     AdmissionSettingsView,
     GuardianDetailView,
@@ -30,6 +31,8 @@ from .views import (
 )
 
 urlpatterns = [
+    path("tenants/<uuid:tenant_id>/campuses/", CampusManagementView.as_view(), name="campus-management"),
+    path("tenants/<uuid:tenant_id>/campuses/<uuid:campus_id>/", CampusManagementDetailView.as_view(), name="campus-management-detail"),
     path("setup/", InitialSchoolSetupView.as_view(), name="initial-school-setup"),
     path("register/", SchoolRegistrationView.as_view(), name="school-register"),
     path("auth/login/", LoginView.as_view(), name="auth-login"),

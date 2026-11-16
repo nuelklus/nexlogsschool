@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import CampusAccessPanel from "./campus-access-panel";
 
 import {
   AccountingPeriod,
@@ -240,6 +241,7 @@ export default function FinanceSettingsPage() {
     <FinanceShell eyebrow="FINANCE ADMIN" title="Settings" active="/finance/settings" description="Configure document numbering, ledger accounts, payment methods and posting periods.">
       {(ctx: FinanceContext) => (
         <div className="enrol-layout">
+          {ctx.canApprove && <CampusAccessPanel ctx={ctx} />}
           <SettingsForm ctx={ctx} />
           <AccountSetup ctx={ctx} />
           <AccountingPeriods ctx={ctx} />

@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from "react";
 
+import { CampusOptions } from "../class-options";
 import {
   PaymentMethod,
   ExpenseRecord,
@@ -489,7 +490,7 @@ function Bills({ ctx }: { ctx: FinanceContext }) {
       {billLines.map((line, index) => <div className="enrol-grid" key={index} aria-label={`Supplier bill line ${index + 1}`}>
         <label>Expense/asset account<select value={line.account} onChange={(event) => setBillLines(billLines.map((item, i) => i === index ? { ...item, account: event.target.value } : item))} required><option value="">Select account</option>{accounts.data?.filter((item) => item.is_active && !item.is_header && ["asset", "expense"].includes(item.type)).map((item) => <option key={item.id} value={item.id}>{item.code} {item.name}</option>)}</select></label>
         <label>Purchase-tax treatment<select value={line.taxCode} onChange={(event) => setBillLines(billLines.map((item, i) => i === index ? { ...item, taxCode: event.target.value } : item))}><option value="">No tax code</option>{taxCodes.data?.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.code} · {item.rate}% · {item.is_inclusive ? "inclusive" : "exclusive"}</option>)}</select></label>
-        <label>Campus / cost centre<select value={line.campus} onChange={(event) => setBillLines(billLines.map((item, i) => i === index ? { ...item, campus: event.target.value } : item))}><option value="">No campus allocation</option>{campuses.data?.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.id}>{item.code} {item.name}</option>)}</select></label>
+        <label>Campus / cost centre<select value={line.campus} onChange={(event) => setBillLines(billLines.map((item, i) => i === index ? { ...item, campus: event.target.value } : item))}><option value="">No campus allocation</option><CampusOptions campuses={campuses.data} /></select></label>
         <label>Description<input value={line.description} onChange={(event) => setBillLines(billLines.map((item, i) => i === index ? { ...item, description: event.target.value } : item))} required maxLength={240} /></label>
         <label>Quantity<input value={line.quantity} onChange={(event) => setBillLines(billLines.map((item, i) => i === index ? { ...item, quantity: event.target.value } : item))} inputMode="decimal" required /></label>
         <label>Unit cost (GHS)<input value={line.unitCost} onChange={(event) => setBillLines(billLines.map((item, i) => i === index ? { ...item, unitCost: event.target.value } : item))} inputMode="decimal" required /></label>
@@ -549,9 +550,10 @@ export function SupplierBillsPage() {
 }
 
 function Expenses({ ctx }: { ctx: FinanceContext }) {
-  const accounts = useFinanceData<LedgerAccount[]>(ctx, "accounts/");
-  const methods = useFinanceData<PaymentMethod[]>(ctx, "payment-methods/");
+  const accounts = useFinanceData<LedgerAccount[]>(ctx, ctx.canApprove ? "accounts/" : "accounts/?purpose=expense");
+  const methods = useFinanceData<PaymentMethod[]>(ctx, ctx.canApprove ? "payment-methods/" : null);
   const campuses = useFinanceData<FinanceCampus[]>(ctx, "campuses/");
+  const report = useFinanceData<{ id: string; date: string; payee: string; category: string; campus: string; amount: string; status: string }[]>(ctx, "reports/expenses/");
   const { data, error, loading, reload } = useFinanceData<ExpenseRecord[]>(ctx, "expenses/");
   const [message, setMessage] = useState("");
   const [failed, setFailed] = useState(false);
@@ -567,13 +569,13 @@ function Expenses({ ctx }: { ctx: FinanceContext }) {
         campus: value(fields, "campus") || undefined,
         transaction_date: value(fields, "transaction_date"), amount: value(fields, "amount"),
       } });
-      form.reset(); reload(); setFailed(false); setMessage("Expense saved as a draft.");
+      form.reset(); reload(); report.reload(); setFailed(false); setMessage("Expense saved as a draft.");
     } catch (caught) { setFailed(true); setMessage(errorText(caught)); }
   }
   async function act(path: string, body?: unknown) {
     try {
       await financeRequest(ctx.authFetch, ctx.tenantId, path, { method: "POST", body });
-      reload(); setFailed(false); setMessage("Expense workflow updated.");
+      reload(); report.reload(); setFailed(false); setMessage("Expense workflow updated.");
     } catch (caught) { setFailed(true); setMessage(errorText(caught)); }
   }
   async function actWithReason(path: string, prompt: string) {
@@ -596,13 +598,14 @@ function Expenses({ ctx }: { ctx: FinanceContext }) {
           reference: value(fields, "payment_reference"),
         },
       });
-      reload(); form.reset(); setFailed(false); setMessage("Expense payment posted.");
+      reload(); report.reload(); form.reset(); setFailed(false); setMessage("Expense payment posted.");
     } catch (caught) { setFailed(true); setMessage(errorText(caught)); }
   }
   return <div className="enrol-layout">
     <form className="enrol-card" onSubmit={(event) => void create(event)} aria-label="Add expense"><div className="enrol-card-head"><div><p className="eyebrow">DIRECT EXPENSE</p><h2>Record expense request</h2></div></div>
       <p className="fin-note">Direct expenses use an approval → payable → payment workflow. Supplier invoices belong in Supplier bills; do not enter the same transaction in both workflows.</p>
-      <div className="enrol-grid"><label>Payee<input name="payee" maxLength={160} required /></label><label>Description<input name="description" maxLength={240} required /></label><label>Expense category/account<select name="expense_account" required defaultValue=""><option value="">Select account</option>{accounts.data?.filter((item) => item.type === "expense" && item.is_active && !item.is_header).map((item) => <option key={item.id} value={item.id}>{item.code} {item.name}</option>)}</select></label><label>Campus / cost centre<select name="campus" defaultValue=""><option value="">No campus allocation</option>{campuses.data?.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.id}>{item.code} {item.name}</option>)}</select></label><label>Date<input name="transaction_date" type="date" required /></label><label>Amount (GHS)<input name="amount" inputMode="decimal" required /></label></div><button className="setup-submit">Save expense draft</button>
+      <LoadState loading={accounts.loading || campuses.loading} error={accounts.error || campuses.error} />
+      <div className="enrol-grid"><label>Payee<input name="payee" maxLength={160} required /></label><label>Description<input name="description" maxLength={240} required /></label><label>Expense category/account<select name="expense_account" required defaultValue=""><option value="">Select account</option>{accounts.data?.filter((item) => item.type === "expense" && item.is_active && !item.is_header).map((item) => <option key={item.id} value={item.id}>{item.code} {item.name}</option>)}</select></label><label>Campus / cost centre<select name="campus" required={!ctx.canApprove} defaultValue=""><option value="">{ctx.canApprove ? "No campus allocation" : "Select an authorized campus"}</option><CampusOptions campuses={campuses.data} /></select></label><label>Date<input name="transaction_date" type="date" required /></label><label>Amount (GHS)<input name="amount" inputMode="decimal" required /></label></div><button className="setup-submit">Save expense draft</button>
     </form>
     <section className="enrol-card roster" aria-label="Expense approval queue"><div className="enrol-card-head"><div><p className="eyebrow">APPROVAL QUEUE</p><h2>Expenses</h2></div></div><LoadState loading={loading} error={error} empty={data?.length === 0} emptyText="No expenses recorded." />
       {data && data.length > 0 && <table className="fin-table">
@@ -617,7 +620,7 @@ function Expenses({ ctx }: { ctx: FinanceContext }) {
               <button className="link-button" onClick={() => void act(`expenses/${expense.id}/approve/`)}>Approve</button>{" "}
               <button className="link-button" onClick={() => void actWithReason(`expenses/${expense.id}/reject/`, "Reason for rejection")}>Reject</button>
             </>}
-            {["approved", "partially_paid"].includes(expense.status) && <form className="fin-inline" onSubmit={(event) => void pay(event, expense)} aria-label={`Pay ${expense.payee}`}>
+            {ctx.canApprove && ["approved", "partially_paid"].includes(expense.status) && <form className="fin-inline" onSubmit={(event) => void pay(event, expense)} aria-label={`Pay ${expense.payee}`}>
               <label>Amount<input name="payment_amount" inputMode="decimal" defaultValue={expense.balance} required /></label>
               <label>From<select name="payment_account" required defaultValue=""><option value="">Cash/bank account</option>{moneyAccounts(accounts.data, methods.data).map((item) => <option key={item.id} value={item.id}>{item.code} {item.name}</option>)}</select></label>
               <label>Date<input name="payment_date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label>
@@ -625,6 +628,19 @@ function Expenses({ ctx }: { ctx: FinanceContext }) {
             </form>}
             {["approved", "partially_paid", "paid"].includes(expense.status) && ctx.canApprove && expense.amount_paid === "0.00" && <button className="link-button" onClick={() => void actWithReason(`expenses/${expense.id}/reverse/`, "Reason for reversal")}>Reverse</button>}
           </td>
+        </tr>)}</tbody>
+      </table>}
+    </section>
+    <section className="enrol-card roster" aria-label="Expense report">
+      <div className="enrol-card-head"><div><p className="eyebrow">REPORT</p><h2>Expenses by campus</h2></div></div>
+      <p className="fin-note">Showing up to 1,000 most recent expense records, including drafts.</p>
+      {!ctx.canApprove && <p className="fin-note">Only expenses for your authorized campuses are shown.</p>}
+      <LoadState loading={report.loading} error={report.error} empty={report.data?.length === 0} emptyText="No expenses available for this report." />
+      {report.data && report.data.length > 0 && <table className="fin-table">
+        <thead><tr><th>Date / payee</th><th>Campus</th><th>Category</th><th>Status</th><th>Amount</th></tr></thead>
+        <tbody>{report.data.map((item) => <tr key={item.id}>
+          <td>{item.date}<small>{item.payee}</small></td><td>{item.campus}</td><td>{item.category}</td>
+          <td><StatusPill status={item.status} /></td><td><Money value={item.amount} /></td>
         </tr>)}</tbody>
       </table>}
     </section>

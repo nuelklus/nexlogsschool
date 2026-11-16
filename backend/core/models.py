@@ -76,6 +76,7 @@ class Membership(models.Model):
         SCHOOL_ADMIN = "school_admin"
         ACCOUNTANT = "accountant"
         TEACHER = "teacher"
+        HEADTEACHER = "headteacher"
         PARENT = "parent"
         STUDENT = "student"
 
@@ -194,6 +195,7 @@ class MembershipInvitation(models.Model):
         SCHOOL_ADMIN = "school_admin"
         ACCOUNTANT = "accountant"
         TEACHER = "teacher"
+        HEADTEACHER = "headteacher"
         PARENT = "parent"
         STUDENT = "student"
 

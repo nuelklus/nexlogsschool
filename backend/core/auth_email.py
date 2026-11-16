@@ -8,7 +8,7 @@ from django.core.mail import send_mail
 from django.db import transaction
 from django.utils import timezone
 
-from .models import EmailActionToken
+from .models import EmailActionToken, User
 
 
 EMAIL_ACTION_LIFETIMES = {
@@ -76,10 +76,32 @@ def send_email_action(user, purpose):
 
 def get_email_action(token, purpose, *, lock=False):
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    actions = EmailActionToken.objects.select_related("user")
     if lock:
-        actions = actions.select_for_update()
-    return actions.filter(
+        # Reset invalidates other tokens, so every action must lock the user first.
+        user_id = EmailActionToken.objects.filter(
+            token_hash=token_hash,
+            purpose=purpose,
+            used_at__isnull=True,
+        ).values_list("user_id", flat=True).first()
+        if user_id is None:
+            return None
+        user = User.objects.select_for_update(no_key=True).filter(pk=user_id).first()
+        if user is None:
+            return None
+        action = EmailActionToken.objects.select_for_update(no_key=True).filter(
+            token_hash=token_hash,
+            purpose=purpose,
+            used_at__isnull=True,
+            user_id=user_id,
+            expires_at__gt=timezone.now(),
+        ).first()
+        # The token may have expired while either lock was being acquired.
+        if action is None or action.expires_at <= timezone.now():
+            return None
+        action.user = user
+        return action
+
+    return EmailActionToken.objects.select_related("user").filter(
         token_hash=token_hash,
         purpose=purpose,
         used_at__isnull=True,

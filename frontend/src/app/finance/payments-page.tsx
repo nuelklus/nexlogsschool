@@ -5,13 +5,13 @@ import { FormEvent, useState } from "react";
 
 import { Payment, PaymentMethod, financeRequest, formatMoney, newIdempotencyKey } from "./finance-api";
 import FinanceShell, { FinanceContext, LoadState, StatusPill, useFinanceData } from "./finance-shell";
-import { useStudents } from "./billing-page";
+import StudentPicker, { StudentMatch } from "./student-picker";
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : "Something went wrong. Try again.");
 const text = (data: FormData, name: string) => String(data.get(name) ?? "").trim();
 
 function RecordForm({ ctx, onDone }: { ctx: FinanceContext; onDone: () => void }) {
-  const students = useStudents(ctx);
+  const [student, setStudent] = useState<StudentMatch | null>(null);
   const methods = useFinanceData<PaymentMethod[]>(ctx, "payment-methods/");
   const [kind, setKind] = useState("");
   const [key, setKey] = useState(newIdempotencyKey);
@@ -22,7 +22,7 @@ function RecordForm({ ctx, onDone }: { ctx: FinanceContext; onDone: () => void }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy) return;
+    if (busy || !student) return;
     const form = event.currentTarget;
     const values = new FormData(form);
     setBusy(true);
@@ -32,7 +32,7 @@ function RecordForm({ ctx, onDone }: { ctx: FinanceContext; onDone: () => void }
         method: "POST",
         idempotencyKey: key,
         body: {
-          student: text(values, "student"),
+          student: student.id,
           method: text(values, "method"),
           amount: text(values, "amount"),
           payment_date: text(values, "payment_date") || undefined,
@@ -49,6 +49,7 @@ function RecordForm({ ctx, onDone }: { ctx: FinanceContext; onDone: () => void }
       );
       setKey(newIdempotencyKey());
       form.reset();
+      setStudent(null);
       setKind("");
       onDone();
     } catch (caught) {
@@ -63,12 +64,7 @@ function RecordForm({ ctx, onDone }: { ctx: FinanceContext; onDone: () => void }
     <form className="enrol-card" onSubmit={submit} aria-label="Record payment">
       <div className="enrol-card-head"><div><p className="eyebrow">NEW PAYMENT</p><h2>Record a payment</h2></div></div>
       <div className="enrol-grid">
-        <label className="enrol-wide">Student
-          <select name="student" required defaultValue="">
-            <option value="" disabled>Select student</option>
-            {students.map((s) => <option key={s.id} value={s.id}>{s.first_name} {s.last_name} · {s.admission_number}</option>)}
-          </select>
-        </label>
+        <StudentPicker ctx={ctx} value={student} onChange={setStudent} />
         <label>Method
           <select name="method" required defaultValue="" onChange={(event) => setKind(methods.data?.find((m) => m.id === event.target.value)?.kind ?? "")}>
             <option value="" disabled>Select method</option>
@@ -85,7 +81,7 @@ function RecordForm({ ctx, onDone }: { ctx: FinanceContext; onDone: () => void }
       </div>
       {kind === "mobile_money" && <p className="fin-note">Mobile-money payments stay pending until you confirm the money has arrived.</p>}
       {message && <p className={failed ? "setup-error" : "enrol-success"} role={failed ? "alert" : "status"}>{message}</p>}
-      <div className="enrol-actions"><button className="setup-submit" type="submit" disabled={busy}>{busy ? "Saving…" : "Record payment"}</button></div>
+      <div className="enrol-actions"><button className="setup-submit" type="submit" disabled={busy || !student}>{busy ? "Saving…" : "Record payment"}</button></div>
     </form>
   );
 }
@@ -165,6 +161,13 @@ function History({ ctx, refresh }: { ctx: FinanceContext; refresh: number }) {
 
 function Payments({ ctx }: { ctx: FinanceContext }) {
   const [refresh, setRefresh] = useState(0);
+  if (!ctx.canApprove) {
+    return <section className="enrol-card" aria-label="Restricted payment access">
+      <h2>Record an invoice payment</h2>
+      <p className="fin-note">Open an issued invoice for an authorized campus to record a fully allocated cash, bank-transfer or cheque payment and view its receipt. Advances and mobile-money payments require an administrator.</p>
+      <Link href="/finance/invoices">Open authorized invoices</Link>
+    </section>;
+  }
   return (
     <div className="enrol-layout">
       <RecordForm ctx={ctx} onDone={() => setRefresh((value) => value + 1)} />

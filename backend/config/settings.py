@@ -116,6 +116,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
+    'academics',
     'core',
     'finance',
 ]
@@ -165,11 +166,12 @@ DATABASES = {
         ),
         'NAME': os.environ.get('DJANGO_DB_NAME', 'nlschool'),
         'USER': os.environ.get('DJANGO_DB_USER', 'nlschool_user'),
-        'PASSWORD': os.environ.get('DJANGO_DB_PASSWORD', ''),
+        'PASSWORD': os.environ.get('DJANGO_DB_PASSWORD', 'Choose_A_Strong_Password'),
         'HOST': os.environ.get('DJANGO_DB_HOST', 'localhost'),
         'PORT': os.environ.get('DJANGO_DB_PORT', '5432'),
     }
 }
+
 if IS_PRODUCTION:
     required_database_settings = ('DJANGO_DB_NAME', 'DJANGO_DB_USER', 'DJANGO_DB_PASSWORD', 'DJANGO_DB_HOST')
     missing_database_settings = [name for name in required_database_settings if not os.environ.get(name)]
@@ -179,21 +181,27 @@ if IS_PRODUCTION:
         )
     if DATABASES['default']['ENGINE'] != 'django.db.backends.postgresql':
         raise ImproperlyConfigured('Production must use PostgreSQL.')
+
+if DATABASES['default']['ENGINE'] == 'django.db.backends.postgresql':
     sslmode = os.environ.get(
-    'DJANGO_DB_SSLMODE', 'verify-full'
+    'DJANGO_DB_SSLMODE',
+    'verify-full' if IS_PRODUCTION else 'disable'
 ).strip().lower()
+    if sslmode not in {'disable', 'verify-full', 'verify-ca'}:
+        raise ImproperlyConfigured(
+            'DJANGO_DB_SSLMODE must be disable, verify-full, or verify-ca.'
+        )
+    if IS_PRODUCTION and sslmode == 'disable':
+        raise ImproperlyConfigured(
+            'Production requires verified PostgreSQL TLS; use verify-full or verify-ca.'
+        )
 
-if sslmode not in {'disable', 'verify-full', 'verify-ca'}:
-    raise ImproperlyConfigured(
-        'DJANGO_DB_SSLMODE must be disable, verify-full, or verify-ca.'
-    )
+    DATABASES['default']['OPTIONS'] = {'sslmode': sslmode}
 
-DATABASES['default']['OPTIONS'] = {'sslmode': sslmode}
-
-if sslmode in {'verify-full', 'verify-ca'}:
-    sslrootcert = os.environ.get('DJANGO_DB_SSLROOTCERT')
-    if sslrootcert:
-        DATABASES['default']['OPTIONS']['sslrootcert'] = sslrootcert
+    if sslmode in {'verify-full', 'verify-ca'}:
+        sslrootcert = os.environ.get('DJANGO_DB_SSLROOTCERT')
+        if sslrootcert:
+            DATABASES['default']['OPTIONS']['sslrootcert'] = sslrootcert
 
 DATABASES['default']['CONN_MAX_AGE'] = 60
 DATABASES['default']['CONN_HEALTH_CHECKS'] = True

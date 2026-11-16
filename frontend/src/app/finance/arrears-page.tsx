@@ -15,7 +15,10 @@ function Arrears({ ctx }: { ctx: FinanceContext }) {
         <div><p className="eyebrow">OUTSTANDING</p><h2>Students who owe fees</h2></div>
         <label className="fin-check"><input type="checkbox" checked={overdueOnly} onChange={(event) => setOverdueOnly(event.target.checked)} /> Overdue only</label>
       </div>
-      <LoadState loading={loading} error={error} empty={data?.length === 0} emptyText="No outstanding balances. Every issued invoice is settled." />
+      {!ctx.canApprove && <p className="fin-note">Balances and classes are based only on invoices for your authorized campuses. Other balances and advances are not included.</p>}
+      <LoadState loading={loading} error={error} empty={data?.length === 0} emptyText={ctx.canApprove
+        ? "No outstanding balances. Every issued invoice is settled."
+        : "No outstanding invoices are available for your authorized campuses."} />
       {data && data.length > 0 && (
         <table className="fin-table">
           <thead><tr><th>Student</th><th>Class</th><th className="num">Invoices</th><th>Oldest due</th><th className="num">Overdue</th><th className="num">Balance</th><th /></tr></thead>
@@ -28,7 +31,7 @@ function Arrears({ ctx }: { ctx: FinanceContext }) {
                 <td>{row.oldest_due_date}</td>
                 <td className="num">{formatMoney(row.overdue_balance)}</td>
                 <td className="num">{formatMoney(row.balance)}</td>
-                <td><Link href={`/finance/statements/${row.student}`}>Statement</Link></td>
+                <td>{ctx.canApprove && <Link href={`/finance/statements/${row.student}`}>Statement</Link>}</td>
               </tr>
             ))}
           </tbody>

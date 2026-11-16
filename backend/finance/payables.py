@@ -1125,8 +1125,10 @@ def supplier_statement(tenant_id, supplier_id):
     return {"supplier": supplier_out(supplier), "entries": result, "closing_balance": str(balance)}
 
 
-def expense_report(tenant_id, *, start=None, end=None, campus_id=None):
+def expense_report(tenant_id, *, start=None, end=None, campus_id=None, campus_scope=None):
     queryset = Expense.objects.filter(tenant_id=tenant_id).select_related("expense_account", "campus")
+    if campus_scope is not None:
+        queryset = queryset.filter(campus_id__in=campus_scope)
     if start:
         queryset = queryset.filter(transaction_date__gte=start)
     if end:

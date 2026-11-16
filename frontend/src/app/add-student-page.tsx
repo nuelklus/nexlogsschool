@@ -3,16 +3,20 @@
 import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
+import { AcademicYear, SchoolClass, listAcademicRecords } from "./academics/academics-api";
 import AuthControls from "./auth-controls";
 import { AuthMembership, useAuth } from "./auth-provider";
-import { GRADE_LEVELS } from "./grade-levels";
 import { InviteForm, useLoadFailure } from "./school/school-dashboard";
+import StudentDetailsModal from "./school/student-details-modal";
 import {
   MANAGE_ROLES,
+  AuthFetch,
+  Campus,
   Student,
   enrollStudent,
   inviteGuardian,
   invitePortal,
+  listCampuses,
   listStudents,
 } from "./school/student-api";
 import { ExpiredNotice } from "./school/subscription-panel";
@@ -23,10 +27,42 @@ const initialsOf = (student: Student) =>
 
 const text = (data: FormData, name: string) => String(data.get(name) ?? "").trim();
 
-function EnrolForm({ onEnrol }: { onEnrol: (data: FormData) => Promise<Student> }) {
+function EnrolForm({ onEnrol, authFetch, tenantId }: { onEnrol: (data: FormData) => Promise<Student>; authFetch: AuthFetch; tenantId: string }) {
+  const [years, setYears] = useState<AcademicYear[] | null>(null);
+  const [classes, setClasses] = useState<SchoolClass[] | null>(null);
+  const [campuses, setCampuses] = useState<Campus[] | null>(null);
+  const [optionsError, setOptionsError] = useState("");
+  const [yearId, setYearId] = useState("");
+  const [campusId, setCampusId] = useState("");
+  const [classId, setClassId] = useState("");
   const [message, setMessage] = useState("");
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      listAcademicRecords(authFetch, tenantId, "years"),
+      listAcademicRecords(authFetch, tenantId, "classes"),
+      listCampuses(authFetch, tenantId),
+    ]).then(([loadedYears, loadedClasses, loadedCampuses]) => {
+      if (!active) return;
+      const availableYears = loadedYears.filter((year) => year.status === "active");
+      setYears(availableYears);
+      setClasses(loadedClasses.filter((schoolClass) => schoolClass.is_active !== false));
+      setCampuses(loadedCampuses);
+      setYearId(availableYears.find((year) => year.is_current)?.id ?? availableYears[0]?.id ?? "");
+      setOptionsError("");
+    }).catch((error: unknown) => {
+      if (active) setOptionsError(error instanceof Error ? error.message : "Admission options could not be loaded.");
+    });
+    return () => { active = false; };
+  }, [authFetch, tenantId]);
+
+  const availableClasses = (classes ?? []).filter((schoolClass) =>
+    schoolClass.academic_year === yearId
+      && (!campusId || schoolClass.campus === campusId),
+  );
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -40,6 +76,8 @@ function EnrolForm({ onEnrol }: { onEnrol: (data: FormData) => Promise<Student> 
         `${created.first_name} ${created.last_name} has been enrolled. Admission number: ${created.admission_number}`,
       );
       setFailed(false);
+      setCampusId("");
+      setClassId("");
       form.reset();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Something went wrong. Try again.");
@@ -74,13 +112,54 @@ function EnrolForm({ onEnrol }: { onEnrol: (data: FormData) => Promise<Student> 
         <div className="enrol-grid">
           <label>Date of birth<input name="date_of_birth" type="date" /></label>
           <label>Gender<input name="gender" maxLength={20} /></label>
-          <label>Class
-            <select name="grade_level" defaultValue="">
-              <option value="">Select class</option>
-              {GRADE_LEVELS.map((level) => <option key={level} value={level}>{level}</option>)}
+          <label>Academic year
+            <select name="initial_academic_year" required value={yearId} onChange={(event) => {
+              setYearId(event.target.value);
+              setClassId("");
+            }} disabled={!years?.length}>
+              <option value="" disabled>Select academic year</option>
+              {years?.map((year) => <option key={year.id} value={year.id}>{year.name}</option>)}
             </select>
           </label>
+          {(campuses?.length ?? 0) > 0 && (
+            <label>Campus
+              <select name="campus" value={campusId} onChange={(event) => {
+                setCampusId(event.target.value);
+                setClassId("");
+              }}>
+                <option value="">Select campus (optional)</option>
+                {campuses?.filter((campus) => campus.status === "active").map((campus) => (
+                  <option key={campus.id} value={campus.id}>{campus.code} {campus.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label>Class group
+            <select
+              name="initial_school_class"
+              required
+              value={classId}
+              onChange={(event) => setClassId(event.target.value)}
+              disabled={!classes}
+            >
+              <option value="">Select class group</option>
+              {availableClasses.map((schoolClass) => (
+                <option key={schoolClass.id} value={schoolClass.id}>
+                  {schoolClass.name}{schoolClass.section ? ` · ${schoolClass.section}` : ""} · {campuses?.find((campus) => campus.id === schoolClass.campus)?.name ?? "No campus assigned"}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>Enrollment date<input name="enrolled_on" type="date" required /></label>
         </div>
+        <p className="fin-note">The class campus is recorded on the enrollment. Classes without a campus cannot support official report publication.</p>
+        {optionsError && <p className="setup-error" role="alert">{optionsError}</p>}
+        {!optionsError && years && !years.length && (
+          <p className="fin-note">Create an active academic year before admitting students.</p>
+        )}
+        {!optionsError && classes && !availableClasses.length && (
+          <p className="fin-note">Create a class group in the selected academic year before admitting students.</p>
+        )}
       </fieldset>
       {message && (
         <p className={failed ? "setup-error" : "enrol-success"} role={failed ? "alert" : "status"}>
@@ -88,7 +167,7 @@ function EnrolForm({ onEnrol }: { onEnrol: (data: FormData) => Promise<Student> 
         </p>
       )}
       <div className="enrol-actions">
-        <button className="setup-submit" type="submit" disabled={busy}>
+        <button className="setup-submit" type="submit" disabled={busy || !years?.length || !availableClasses.length}>
           {busy ? "Enrolling…" : "Enrol student"}
         </button>
       </div>
@@ -98,10 +177,14 @@ function EnrolForm({ onEnrol }: { onEnrol: (data: FormData) => Promise<Student> 
 
 function StudentRow({
   student,
+  className,
+  onDetails,
   onGuardian,
   onPortal,
 }: {
   student: Student;
+  className?: string;
+  onDetails: (student: Student, trigger: HTMLButtonElement) => void;
   onGuardian: (student: Student, data: FormData) => Promise<string>;
   onPortal: (student: Student, data: FormData) => Promise<string>;
 }) {
@@ -109,13 +192,13 @@ function StudentRow({
     <li className="roster-row">
       <div className="roster-main">
         <span className="roster-avatar" aria-hidden="true">{initialsOf(student)}</span>
-        <div className="roster-name">
+        <button type="button" className="roster-name roster-details-button" onClick={(event) => onDetails(student, event.currentTarget)} aria-label={`View details for ${student.first_name} ${student.last_name}, ${student.admission_number}`}>
           <strong>{student.first_name} {student.last_name}</strong>
           <span>
             {student.admission_number}
-            {student.grade_level ? ` · ${student.grade_level}` : ""}
+            {className || student.grade_level ? ` · ${className || student.grade_level}` : ""}
           </span>
-        </div>
+        </button>
         <span className={`state-pill ${student.status === "active" ? "ready" : "pending"}`}>
           <span className="state-dot" />
           {student.status}
@@ -156,6 +239,15 @@ function Page({
   const tenantId = membership.tenant_id;
   const [students, setStudents] = useState<Student[] | null>(null);
   const [query, setQuery] = useState("");
+  const [selectedStudent, setSelectedStudent] = useState<{ student: Student; trigger: HTMLButtonElement } | null>(null);
+  const [rosterClasses, setRosterClasses] = useState<SchoolClass[] | null>(null);
+  const [rosterCampuses, setRosterCampuses] = useState<Campus[] | null>(null);
+  const [filterError, setFilterError] = useState("");
+  const [classFilter, setClassFilter] = useState("");
+  const [campusFilter, setCampusFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [genderFilter, setGenderFilter] = useState("");
+  const [portalFilter, setPortalFilter] = useState("");
   const { error, setError, expired, onFailure } = useLoadFailure();
 
   useEffect(() => {
@@ -168,6 +260,23 @@ function Page({
     };
   }, [authFetch, tenantId, setError, onFailure]);
 
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      listAcademicRecords(authFetch, tenantId, "years"),
+      listAcademicRecords(authFetch, tenantId, "classes"),
+      listCampuses(authFetch, tenantId),
+    ]).then(([years, classes, campuses]) => {
+      if (!active) return;
+      const currentYear = years.find((year) => year.is_current);
+      setRosterClasses(classes.filter((item) => item.academic_year === currentYear?.id));
+      setRosterCampuses(campuses);
+    }).catch((caught: unknown) => {
+      if (active) setFilterError(caught instanceof Error ? caught.message : "Could not load filter options.");
+    });
+    return () => { active = false; };
+  }, [authFetch, tenantId]);
+
   const enrol = useCallback(
     async (data: FormData) => {
       const created = await enrollStudent(authFetch, tenantId, {
@@ -175,7 +284,10 @@ function Page({
         last_name: text(data, "last_name"),
         date_of_birth: text(data, "date_of_birth"),
         gender: text(data, "gender"),
-        grade_level: text(data, "grade_level"),
+        enrolled_on: text(data, "enrolled_on"),
+        initial_academic_year: text(data, "initial_academic_year"),
+        initial_school_class: text(data, "initial_school_class"),
+        campus: text(data, "campus"),
       });
       setStudents((existing) => [...(existing ?? []), created]);
       return created;
@@ -208,13 +320,21 @@ function Page({
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!students) return [];
-    if (!needle) return students;
     return students.filter((student) =>
-      `${student.first_name} ${student.last_name} ${student.admission_number} ${student.grade_level}`
+      (!needle || `${student.first_name} ${student.last_name} ${student.admission_number} ${student.grade_level}`
         .toLowerCase()
-        .includes(needle),
+        .includes(needle))
+      && (!classFilter || (classFilter === "__none__" ? !student.current_class : student.current_class === classFilter))
+      && (!campusFilter || (campusFilter === "__none__" ? !student.campus : student.campus === campusFilter))
+      && (!statusFilter || student.status === statusFilter)
+      && (!genderFilter || (genderFilter === "__none__" ? !student.gender : student.gender === genderFilter))
+      && (!portalFilter || student.portal_account === (portalFilter === "active")),
     );
-  }, [students, query]);
+  }, [students, query, classFilter, campusFilter, statusFilter, genderFilter, portalFilter]);
+  const genders = [...new Set((students ?? []).map((student) => student.gender).filter(Boolean))].sort();
+  function clearFilters() {
+    setQuery(""); setClassFilter(""); setCampusFilter(""); setStatusFilter(""); setGenderFilter(""); setPortalFilter("");
+  }
 
   const total = students?.length ?? null;
   const active = students?.filter((student) => student.status === "active").length ?? null;
@@ -258,7 +378,7 @@ function Page({
               {error && <p className="setup-error" role="alert">{error}</p>}
 
               <div className="enrol-layout">
-                <EnrolForm onEnrol={enrol} />
+                <EnrolForm onEnrol={enrol} authFetch={authFetch} tenantId={tenantId} />
                 <section className="enrol-card roster" aria-label="Student roster">
                   <div className="enrol-card-head">
                     <div>
@@ -274,21 +394,51 @@ function Page({
                       onChange={(event) => setQuery(event.target.value)}
                     />
                   </div>
-                  {students === null && !error ? (
-                    <p role="status" className="roster-empty">Loading students…</p>
+                  {filterError && <p className="setup-error" role="alert">Class and campus filter options could not be loaded: {filterError}</p>}
+                  <div className="roster-filters" aria-label="Student filters">
+                    <label>Filter by class group <select value={classFilter} disabled={!rosterClasses} onChange={(event) => setClassFilter(event.target.value)}>
+                      <option value="">All class groups</option>
+                      {rosterClasses?.map((item) => <option key={item.id} value={item.id}>{item.name}{item.section ? ` ${item.section}` : ""}{item.is_active === false ? " (archived)" : ""}</option>)}
+                      <option value="__none__">No unique current class</option>
+                    </select></label>
+                    <label>Filter by campus <select value={campusFilter} disabled={!rosterCampuses} onChange={(event) => setCampusFilter(event.target.value)}>
+                      <option value="">All campuses</option>
+                      {rosterCampuses?.map((campus) => <option key={campus.id} value={campus.id}>{campus.name}{campus.status !== "active" ? " (inactive)" : ""}</option>)}
+                      <option value="__none__">No campus</option>
+                    </select></label>
+                    <label>Filter by status <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                      <option value="">All statuses</option><option value="active">Active</option><option value="withdrawn">Withdrawn</option><option value="graduated">Graduated</option>
+                    </select></label>
+                    <label>Filter by gender <select value={genderFilter} onChange={(event) => setGenderFilter(event.target.value)}>
+                      <option value="">All genders</option>{genders.map((gender) => <option key={gender} value={gender}>{gender}</option>)}<option value="__none__">Not specified</option>
+                    </select></label>
+                    <label>Filter by portal access <select value={portalFilter} onChange={(event) => setPortalFilter(event.target.value)}>
+                      <option value="">All students</option><option value="active">Account active</option><option value="inactive">No account</option>
+                    </select></label>
+                    <button type="button" onClick={clearFilters}>Clear filters</button>
+                  </div>
+                  <p className="fin-note">Class groups reflect unique active enrollments in the current academic year; students without one are listed separately. Campus may use the student profile when enrollment evidence is unavailable.</p>
+                  {students !== null && <p className="fin-note" aria-live="polite">Showing {visible.length} of {students.length} students.</p>}
+                  {students === null ? (
+                    !error && <p role="status" className="roster-empty">Loading students…</p>
                   ) : students?.length === 0 ? (
                     <p className="roster-empty">No students are enrolled yet. Use the form to add the first one.</p>
                   ) : visible.length === 0 ? (
-                    <p className="roster-empty">No students match your search.</p>
+                    <p className="roster-empty">No students match your search or filters.</p>
                   ) : (
                     <ul className="roster-list">
-                      {visible.map((student) => (
-                        <StudentRow key={student.id} student={student} onGuardian={guardian} onPortal={portal} />
-                      ))}
+                      {visible.map((student) => {
+                        const schoolClass = rosterClasses?.find((item) => item.id === student.current_class);
+                        return <StudentRow key={student.id} student={student} className={schoolClass ? [schoolClass.name, schoolClass.section].filter(Boolean).join(" ") : undefined} onDetails={(item, trigger) => setSelectedStudent({ student: item, trigger })} onGuardian={guardian} onPortal={portal} />;
+                      })}
                     </ul>
                   )}
                 </section>
               </div>
+              {selectedStudent && <StudentDetailsModal key={selectedStudent.student.id} student={selectedStudent.student} returnFocus={selectedStudent.trigger}
+                schoolClass={rosterClasses?.find((item) => item.id === selectedStudent.student.current_class) ?? null}
+                campus={rosterCampuses?.find((item) => item.id === selectedStudent.student.campus) ?? null}
+                authFetch={authFetch} tenantId={tenantId} onClose={() => setSelectedStudent(null)} />}
             </>
           )}
         </div>

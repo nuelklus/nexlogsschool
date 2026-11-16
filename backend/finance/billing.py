@@ -7,6 +7,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from academics.models import AcademicTerm, StudentEnrollment
 from core.models import AcademicYear, Student
 
 from .ledger import FinanceError, lock_finance, next_number, post_entry, reverse_entry, round_money, system_account
@@ -22,7 +23,67 @@ from .models import (
 )
 
 
-def applicable_schedules(student, academic_year, on_date):
+def term_start_date(tenant_id, academic_year, period_label):
+    base_label = period_label.split(" (supplementary", 1)[0].strip()
+    term = AcademicTerm.objects.filter(
+        tenant_id=tenant_id,
+        academic_year=academic_year,
+        name__iexact=base_label,
+    ).first()
+    return term.start_date if term else academic_year.start_date
+
+
+def _term_start_enrollment(student, academic_year, period_label):
+    base_label = period_label.split(" (supplementary", 1)[0].strip()
+    term = AcademicTerm.objects.filter(
+        tenant_id=student.tenant_id,
+        academic_year=academic_year,
+        name__iexact=base_label,
+    ).first()
+    on_date = term_start_date(student.tenant_id, academic_year, period_label)
+    enrollments = list(
+        StudentEnrollment.objects.filter(
+            tenant_id=student.tenant_id,
+            student=student,
+            school_class__academic_year=academic_year,
+            enrolled_on__lte=on_date,
+            status__in=(StudentEnrollment.Status.ACTIVE, StudentEnrollment.Status.TRANSFERRED),
+        ).filter(Q(ended_on__isnull=True) | Q(ended_on__gte=on_date))
+        .select_related("school_class__class_level", "school_class__campus", "campus")
+    )
+    if len(enrollments) > 1:
+        raise FinanceError(
+            f"{student.first_name} {student.last_name} has multiple class enrollments covering "
+            f"{term.name if term else academic_year.name}'s start. Resolve the academic history before billing.",
+            409,
+            "enrollment",
+        )
+    enrollment = enrollments[0] if enrollments else None
+    warnings = []
+    if term is None:
+        warnings.append(
+            "No academic term matches this billing period; the academic-year start was used to resolve enrollment."
+        )
+    if enrollment is None:
+        warnings.append(
+            "No class enrollment covers the term start; legacy profile class and campus were used for this preview."
+        )
+    elif not enrollment.campus_id and (
+        enrollment.school_class.campus_id or student.campus_id
+    ):
+        warnings.append(
+            "The enrollment has no campus snapshot; the class-group or legacy profile campus was used for billing."
+        )
+    return enrollment, on_date, warnings
+
+
+def _enrollment_campus(student, enrollment):
+    if enrollment:
+        return enrollment.campus or enrollment.school_class.campus or student.campus
+    return student.campus
+
+
+def applicable_schedules(student, academic_year, on_date, *, enrollment=None):
     """The schedules that bill this student, at most one per fee category.
 
     When a category has both an all-classes and a class-specific schedule (or a
@@ -34,15 +95,27 @@ def applicable_schedules(student, academic_year, on_date):
         status=FeeSchedule.Status.ACTIVE,
         effective_from__lte=on_date,
         category__is_active=True,
-    ).select_related("category")
+    ).select_related("category", "class_level")
     chosen = {}
     for schedule in candidates:
         if schedule.effective_to and schedule.effective_to < on_date:
             continue
-        if schedule.campus_id and schedule.campus_id != student.campus_id:
+        campus_id = _enrollment_campus(student, enrollment)
+        campus_id = campus_id.pk if campus_id else None
+        if schedule.campus_id and schedule.campus_id != campus_id:
             continue
-        class_match = bool(schedule.grade_level)
-        if class_match and schedule.grade_level.casefold() != student.grade_level.casefold():
+        class_name = enrollment.school_class.name if enrollment else student.grade_level
+        if schedule.class_level_id:
+            if (
+                not enrollment
+                or schedule.class_level.tenant_id != student.tenant_id
+                or enrollment.school_class.class_level_id != schedule.class_level_id
+            ):
+                continue
+            class_match = True
+        else:
+            class_match = bool(schedule.grade_level)
+        if class_match and schedule.grade_level and schedule.grade_level.casefold() != class_name.casefold():
             continue
         score = (int(class_match), int(bool(schedule.campus_id)), schedule.effective_from)
         current = chosen.get(schedule.category_id)
@@ -118,7 +191,10 @@ def calculate_billing(student, year, period_label, on_date, *, only_categories=N
             {"description": schedule.category.name, "applicability": schedule.applicability, "code": code, "reason": reason}
         )
 
-    for schedule in applicable_schedules(student, year, on_date):
+    enrollment, term_start, warnings = _term_start_enrollment(student, year, period_label)
+    class_name = enrollment.school_class.name if enrollment else student.grade_level
+    campus = _enrollment_campus(student, enrollment)
+    for schedule in applicable_schedules(student, year, on_date, enrollment=enrollment):
         category = schedule.category
         if only_categories is not None and category.pk not in only_categories:
             continue
@@ -179,6 +255,8 @@ def calculate_billing(student, year, period_label, on_date, *, only_categories=N
     return {
         "lines": lines, "excluded": excluded, "blockers": blockers,
         "subtotal": subtotal, "discount_total": subtotal - remaining, "total": remaining,
+        "enrollment": enrollment, "enrollment_date": term_start, "warnings": warnings,
+        "class_name": class_name, "campus": campus,
     }
 
 
@@ -219,6 +297,22 @@ def snapshot(calc, on_date):
 
     return {
         "calculated_on": on_date.isoformat(), "period_label": calc["period_label"],
+        "class_at_term_start": calc["class_name"],
+        "academic_enrollment": (
+            {
+                "id": str(calc["enrollment"].pk),
+                "school_class": str(calc["enrollment"].school_class_id),
+                "class_level": (
+                    str(calc["enrollment"].school_class.class_level_id)
+                    if calc["enrollment"].school_class.class_level_id else None
+                ),
+                "campus": str(calc["campus"].pk) if calc["campus"] else None,
+                "enrolled_on": calc["enrollment"].enrolled_on.isoformat(),
+                "as_of": calc["enrollment_date"].isoformat(),
+            }
+            if calc["enrollment"] else None
+        ),
+        "warnings": calc["warnings"],
         "fees": [line(l) for l in calc["lines"] if l["kind"] == "fee"],
         "charges": [line(l) for l in calc["lines"] if l["kind"] == "charge"],
         "discounts": [line(l) for l in calc["lines"] if l["kind"] == "discount"],
@@ -246,6 +340,14 @@ def generate_invoice(
         year = AcademicYear.objects.filter(pk=academic_year_id, tenant_id=tenant_id).first()
         if year is None:
             raise FinanceError("Academic year not found.", 404, "academic_year")
+        # Billing stays closed for a completed term until it is reopened. The term row stays locked until this
+        # transaction ends, so closure (which locks the same row) cannot complete the term mid-invoice, and a
+        # closure that committed while we waited is seen here. Order: FinanceSettings, then term; closure never
+        # takes FinanceSettings, so this adds no lock-order inversion.
+        from academics.closure import is_term_closed
+
+        if is_term_closed(tenant_id, year.pk, period_label, lock=True):
+            raise FinanceError("This term has been closed. Reopen it in Academic Management before billing it.", 409, "period_label")
         today = timezone.localdate()
         due_date = due_date or today + timedelta(days=settings.default_payment_terms_days)
         if due_date < today:
@@ -269,8 +371,8 @@ def generate_invoice(
                     tenant_id=tenant_id,
                     student=student,
                     academic_year=year,
-                    campus=student.campus,
-                    grade_level=student.grade_level,
+                    campus=calc["campus"],
+                    grade_level=calc["class_name"],
                     period_label=period_label,
                     due_date=due_date,
                     subtotal=subtotal,
@@ -290,12 +392,16 @@ def preview_invoices(tenant_id, students, year, period_label, *, supplementary=F
     today = timezone.localdate()
     rows = []
     for student in students:
-        row = {"student": student, "issues": [], "calculation": None, "totals": None, "can_generate": False}
+        row = {
+            "student": student, "issues": [], "warnings": [], "calculation": None,
+            "totals": None, "can_generate": False,
+        }
         try:
             if student.status != Student.Status.ACTIVE:
                 raise FinanceError("Only active students can be billed.")
             calc = plan_invoice(student, year, period_label, today, supplementary=supplementary, category_ids=category_ids)
             row["calculation"] = snapshot(calc, today)
+            row["warnings"] = list(calc["warnings"])
             row["totals"] = {"subtotal": calc["subtotal"], "discount_total": calc["discount_total"], "total": calc["total"]}
             row["issues"] = list(calc["blockers"])
             if _live_invoice_exists(tenant_id, student, year, calc["period_label"]):

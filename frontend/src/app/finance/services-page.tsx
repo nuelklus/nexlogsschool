@@ -2,7 +2,8 @@
 
 import { FormEvent, useMemo, useState } from "react";
 
-import { TERMS } from "../grade-levels";
+import { NoTermsHint } from "./no-terms-hint";
+import { useTermOptions } from "./use-term-options";
 import { Adjustment, Enrollment, FeeCategory, FeeSchedule, Usage, financeRequest, formatMoney } from "./finance-api";
 import { useStudents } from "./billing-page";
 import FinanceShell, { FinanceContext, LoadState, StatusPill, useFinanceData } from "./finance-shell";
@@ -145,7 +146,10 @@ function Enrollments({ ctx, serviceCategories }: { ctx: FinanceContext; serviceC
 function UsageEntry({ ctx, unitCategories, years }: { ctx: FinanceContext; unitCategories: FeeCategory[]; years: Year[] }) {
   const students = useStudentOptions(ctx);
   const current = years.find((year) => year.is_current) ?? years[0];
-  const [term, setTerm] = useState<string>(TERMS[0]);
+  const [yearId, setYearId] = useState(current?.id ?? "");
+  const terms = useTermOptions(ctx, yearId);
+  const [chosenTerm, setTerm] = useState("");
+  const term = terms.includes(chosenTerm) ? chosenTerm : terms[0];
   const usage = useFinanceData<Usage[]>(ctx, `service-usage/?period_label=${encodeURIComponent(term)}`);
   const [message, setMessage] = useState("");
   const [failed, setFailed] = useState(false);
@@ -183,10 +187,11 @@ function UsageEntry({ ctx, unitCategories, years }: { ctx: FinanceContext; unitC
       <p className="fin-note">Per-unit fees (for example meals) are billed as units × price. Usage must be recorded for the term before an invoice can be created.</p>
       <form className="fin-inline" onSubmit={record} aria-label="Record usage">
         <label>Term
-          <select value={term} onChange={(event) => setTerm(event.target.value)}>{TERMS.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+          <select value={term} onChange={(event) => setTerm(event.target.value)}>{terms.map((t) => <option key={t} value={t}>{t}</option>)}</select>
         </label>
+        <NoTermsHint ctx={ctx} yearId={yearId} />
         <label>Academic year
-          <select name="academic_year" required defaultValue={current?.id ?? ""} key={current?.id ?? "none"}>
+          <select name="academic_year" required value={yearId} onChange={(event) => setYearId(event.target.value)}>
             {years.map((y) => <option key={y.id} value={y.id}>{y.name}</option>)}
           </select>
         </label>

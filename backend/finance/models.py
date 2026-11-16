@@ -10,6 +10,16 @@ MONEY = {"max_digits": 14, "decimal_places": 2}
 ZERO = Decimal("0.00")
 
 
+class FinanceCampusGrant(models.Model):
+    membership = models.ForeignKey("core.Membership", on_delete=models.CASCADE, related_name="finance_campus_grants")
+    campus = models.ForeignKey("core.Campus", on_delete=models.CASCADE, related_name="finance_grants")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("membership", "campus"), name="unique_finance_campus_grant"),
+        ]
+
+
 class ImmutableError(Exception):
     """Raised when code tries to edit or delete a posted accounting record."""
 
@@ -210,8 +220,12 @@ class FeeSchedule(models.Model):
     tenant = models.ForeignKey("core.Tenant", on_delete=models.CASCADE, related_name="fee_schedules")
     academic_year = models.ForeignKey("core.AcademicYear", on_delete=models.PROTECT, related_name="fee_schedules")
     category = models.ForeignKey(FeeCategory, on_delete=models.PROTECT, related_name="schedules")
-    # Matches Student.grade_level; blank means every class.
+    # Legacy text match; new schedules should use class_level.
     grade_level = models.CharField(max_length=40, blank=True)
+    class_level = models.ForeignKey(
+        "academics.SchoolClassLevel", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="fee_schedules",
+    )
     campus = models.ForeignKey("core.Campus", null=True, blank=True, on_delete=models.PROTECT, related_name="fee_schedules")
     # For a per-unit fee this is the price of one unit (for example one meal).
     amount = models.DecimalField(**MONEY)
@@ -401,7 +415,7 @@ class Invoice(models.Model):
     student = models.ForeignKey("core.Student", on_delete=models.PROTECT, related_name="invoices")
     academic_year = models.ForeignKey("core.AcademicYear", on_delete=models.PROTECT, related_name="invoices")
     campus = models.ForeignKey("core.Campus", null=True, blank=True, on_delete=models.SET_NULL, related_name="invoices")
-    # Snapshot of the student's class at billing time (there is no enrollment model yet).
+    # Snapshot of the student's class at billing time.
     grade_level = models.CharField(max_length=40, blank=True)
     period_label = models.CharField(max_length=60, blank=True)
     status = models.CharField(max_length=14, choices=Status.choices, default=Status.DRAFT)
@@ -853,4 +867,51 @@ class ExpensePayment(models.Model):
         constraints = [
             models.UniqueConstraint(fields=("tenant", "idempotency_key"), name="unique_expense_payment_idempotency"),
             models.CheckConstraint(check=Q(amount__gt=0), name="expense_payment_amount_positive"),
+        ]
+
+
+class IncomeCategory(models.Model):
+    """A source of income other than student fees, such as donations, canteen sales or rentals."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey("core.Tenant", on_delete=models.CASCADE, related_name="income_categories")
+    name = models.CharField(max_length=80)
+    income_account = models.ForeignKey(Account, on_delete=models.PROTECT, related_name="income_categories")
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ("name",)
+        constraints = [models.UniqueConstraint(fields=("tenant", "name"), name="unique_income_category_per_tenant")]
+
+
+class OtherIncome(models.Model):
+    class Status(models.TextChoices):
+        CONFIRMED = "confirmed"
+        REVERSED = "reversed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey("core.Tenant", on_delete=models.PROTECT, related_name="other_income")
+    category = models.ForeignKey(IncomeCategory, on_delete=models.PROTECT, related_name="records")
+    method = models.ForeignKey(PaymentMethod, on_delete=models.PROTECT, related_name="other_income")
+    amount = models.DecimalField(**MONEY)
+    income_date = models.DateField()
+    payer_name = models.CharField(max_length=120, blank=True)
+    reference = models.CharField(max_length=80, blank=True)
+    description = models.CharField(max_length=240, blank=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.CONFIRMED)
+    idempotency_key = models.CharField(max_length=120, blank=True)
+    journal_entry = models.ForeignKey(JournalEntry, null=True, on_delete=models.PROTECT, related_name="+")
+    reversal_entry = models.ForeignKey(JournalEntry, null=True, blank=True, on_delete=models.PROTECT, related_name="+")
+    recorded_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+")
+    reversed_at = models.DateTimeField(null=True, blank=True)
+    reversal_reason = models.CharField(max_length=240, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-income_date", "-created_at")
+        constraints = [
+            models.CheckConstraint(check=Q(amount__gt=0), name="other_income_amount_positive"),
+            models.UniqueConstraint(
+                fields=("tenant", "idempotency_key"), condition=~Q(idempotency_key=""), name="unique_other_income_idempotency_key"
+            ),
         ]

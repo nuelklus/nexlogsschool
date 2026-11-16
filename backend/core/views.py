@@ -43,6 +43,7 @@ STAFF_INVITATION_ROLES = (
     MembershipInvitation.Role.SCHOOL_ADMIN,
     MembershipInvitation.Role.ACCOUNTANT,
     MembershipInvitation.Role.TEACHER,
+    MembershipInvitation.Role.HEADTEACHER,
 )
 
 
@@ -333,27 +334,45 @@ class AcceptStaffInvitationView(APIView):
         token_hash = hashlib.sha256(
             serializer.validated_data["token"].encode("utf-8")
         ).hexdigest()
-        now = timezone.now()
+        invalid_response = Response(
+            {"detail": "This staff invitation is invalid or no longer active."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
         with transaction.atomic():
+            # Lock the shared user first, but allow audit FK KEY SHARE checks
+            # from transactions holding the tenant row. Revalidate the invitation
+            # after both locks; this path only updates non-key user fields.
+            unlocked = (
+                MembershipInvitation.objects.filter(token_hash=token_hash)
+                .values_list("email", flat=True)
+                .first()
+            )
+            if unlocked is None:
+                return invalid_response
+            user = (
+                User.objects.select_for_update(no_key=True)
+                .filter(email__iexact=unlocked)
+                .first()
+            )
             invitation = (
                 MembershipInvitation.objects.select_for_update()
                 .select_related("tenant")
                 .filter(token_hash=token_hash)
                 .first()
             )
+            # Take the timestamp after any lock wait so expiry is checked fresh.
+            now = timezone.now()
             if (
                 invitation is None
+                or invitation.email.casefold() != unlocked.casefold()
                 or invitation.accepted_at is not None
                 or invitation.revoked_at is not None
                 or invitation.expires_at <= now
                 or not self._role_is_acceptable(invitation)
                 or invitation.tenant.status != Tenant.Status.ACTIVE
             ):
-                return Response(
-                    {"detail": "This staff invitation is invalid or no longer active."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                return invalid_response
 
             student = None
             if invitation.student_id:
@@ -364,11 +383,6 @@ class AcceptStaffInvitationView(APIView):
                         status=status.HTTP_409_CONFLICT,
                     )
 
-            user = (
-                User.objects.select_for_update()
-                .filter(email__iexact=invitation.email)
-                .first()
-            )
             if user is not None and not user.is_active:
                 return Response(
                     {"detail": "This account is inactive. Contact the school administrator."},

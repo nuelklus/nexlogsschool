@@ -10,7 +10,6 @@ import {
   MANAGE_ROLES,
   READ_ROLES,
   Student,
-  enrollStudent,
   getOwnStudent,
   inviteGuardian,
   invitePortal,
@@ -19,6 +18,8 @@ import {
   SubscriptionExpiredError,
 } from "./student-api";
 import { ExpiredNotice } from "./subscription-panel";
+import PublishedResults from "./published-results";
+import PublishedReportCards from "./published-report-cards";
 
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : "Something went wrong. Try again.";
@@ -72,51 +73,6 @@ function StudentName({ student }: { student: Student }) {
         {student.grade_level ? ` · ${student.grade_level}` : ""} · {student.status}
       </span>
     </>
-  );
-}
-
-function EnrollForm({ onEnroll }: { onEnroll: (data: FormData) => Promise<Student> }) {
-  const [message, setMessage] = useState("");
-  const [failed, setFailed] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (busy) return;
-    const form = event.currentTarget;
-    setBusy(true);
-    setMessage("");
-    try {
-      const created = await onEnroll(new FormData(form));
-      setMessage(
-        `${created.first_name} ${created.last_name} has been enrolled. Admission number: ${created.admission_number}`,
-      );
-      setFailed(false);
-      form.reset();
-    } catch (error) {
-      setMessage(errorText(error));
-      setFailed(true);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form className="setup-form school-form" onSubmit={submit}>
-      <h2>Enroll a student</h2>
-      <p className="school-note">The admission number is generated automatically when you enroll the student.</p>
-      <label>First name<input name="first_name" maxLength={100} required /></label>
-      <label>Last name<input name="last_name" maxLength={100} required /></label>
-      <label>Date of birth<input name="date_of_birth" type="date" /></label>
-      <label>Gender<input name="gender" maxLength={20} /></label>
-      <label>Grade level<input name="grade_level" maxLength={40} /></label>
-      {message && (
-        <p className={failed ? "setup-error" : "school-note"} role={failed ? "alert" : "status"}>{message}</p>
-      )}
-      <button className="setup-submit" type="submit" disabled={busy}>
-        {busy ? "Enrolling…" : "Enroll student"}
-      </button>
-    </form>
   );
 }
 
@@ -190,22 +146,6 @@ function StaffView({
     };
   }, [authFetch, tenantId, setError, onFailure]);
 
-  const enroll = useCallback(
-    async (data: FormData) => {
-      const text = (name: string) => String(data.get(name) ?? "").trim();
-      const created = await enrollStudent(authFetch, tenantId, {
-        first_name: text("first_name"),
-        last_name: text("last_name"),
-        date_of_birth: text("date_of_birth"),
-        gender: text("gender"),
-        grade_level: text("grade_level"),
-      });
-      setStudents((existing) => [...(existing ?? []), created]);
-      return created;
-    },
-    [authFetch, tenantId],
-  );
-
   if (expired) {
     return <ExpiredNotice message={expired} canManage={canManage} tenantId={tenantId} authFetch={authFetch} />;
   }
@@ -213,7 +153,11 @@ function StaffView({
   return (
     <>
       {error && <p className="setup-error" role="alert">{error}</p>}
-      {canManage && <EnrollForm onEnroll={enroll} />}
+      {canManage && (
+        <p className="school-note">
+          Need to admit a student? <Link href="/dashboard-add-student">Open the admission form</Link>.
+        </p>
+      )}
       <h2>Students</h2>
       {students === null && !error ? (
         <p role="status">Loading students…</p>
@@ -305,6 +249,8 @@ function ParentView({ membership, authFetch }: { membership: AuthMembership; aut
           ))}
         </ul>
       )}
+      <PublishedResults tenantId={membership.tenant_id} authFetch={authFetch} />
+      <PublishedReportCards tenantId={membership.tenant_id} authFetch={authFetch} />
     </>
   );
 }
@@ -338,6 +284,8 @@ function StudentView({ membership, authFetch }: { membership: AuthMembership; au
       ) : (
         !error && <p role="status">Loading…</p>
       )}
+      <PublishedResults tenantId={membership.tenant_id} authFetch={authFetch} />
+      <PublishedReportCards tenantId={membership.tenant_id} authFetch={authFetch} />
     </>
   );
 }
@@ -374,6 +322,11 @@ export default function SchoolDashboard() {
           <span>{membership.tenant_name.toUpperCase()}</span>
           <span>{role.replaceAll("_", " ").toUpperCase()}</span>
         </div>
+        {READ_ROLES.includes(role) && (
+          <p className="school-note">
+            <Link href="/academics">Open Academic Management <span aria-hidden="true">→</span></Link>
+          </p>
+        )}
         {user.memberships.length > 1 && (
           <label className="school-switch">
             School
