@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from core.models import Membership, Student
 
+from .class_subjects import class_subject_ids
 from .models import (
     Assessment,
     AssessmentResult,
@@ -112,12 +113,14 @@ def _exam_items(term, enrollments):
         ).values_list("assessment_id", "enrollment_id")
     )
     missing_total, classes, students = 0, set(), {}
+    subjects_by_class = {
+        class_id: set(class_subject_ids(term.tenant_id, class_id)) for class_id in by_class
+    }
     for assessment in assessments:
         if assessment.assessment_date > today:
             continue
         for enrollment in by_class.get(assessment.school_class_id, []):
-            taken = list(enrollment.subjects.all())
-            if taken and assessment.subject_id not in {s.pk for s in taken}:
+            if assessment.subject_id not in subjects_by_class[assessment.school_class_id]:
                 continue
             if (assessment.pk, enrollment.pk) not in scored:
                 missing_total += 1

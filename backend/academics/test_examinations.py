@@ -55,6 +55,24 @@ class ExaminationTests(AcademicFixture, TestCase):
             {"enrollment": self.enrollment["id"], "component": "exam", "status": "scored", "score": "80", "remarks": "Good"},
         ]}
 
+    def test_class_subject_includes_students_with_old_restrictions_for_mark_entry(self):
+        science = Subject.objects.create(tenant=self.tenant, name="Science", code="SCI")
+        TeachingAssignment.objects.create(
+            tenant=self.tenant, school_class=self.school_class, subject=science, teacher=self.teacher
+        )
+        enrollment = StudentEnrollment.objects.get(pk=self.enrollment["id"])
+        enrollment.subjects.set([self.subject])
+        response = self.client.post(self.url, {**self.payload, "subject": str(science.pk)}, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        path = self.url + response.data["id"] + "/"
+        self.client.force_authenticate(user=self.teacher)
+        detail = self.client.get(path)
+        self.assertEqual(detail.status_code, 200, detail.data)
+        self.assertEqual([row["enrollment"] for row in detail.data["students"]], [str(enrollment.pk)])
+        saved = self.client.post(path, self.entries(), format="json")
+        self.assertEqual(saved.status_code, 200, saved.data)
+        self.assertEqual(AssessmentResult.objects.filter(enrollment=enrollment, assessment__examination_id=response.data["id"]).count(), 2)
+
     def test_grouped_exams_have_independent_schedules_and_teacher_scope(self):
         other_teacher = self.make_member(self.tenant, "groupteacher@northstar.example", Membership.Role.TEACHER)
         other_class = SchoolClass.objects.create(tenant=self.tenant, academic_year=self.year, name="Grade 2")
@@ -385,6 +403,14 @@ class ExaminationTests(AcademicFixture, TestCase):
         self.assertEqual(self.client.get(reports).data, [])
         self.assertEqual(self.client.get(reports + report_id + "/pdf/").status_code, 404)
         self.client.force_authenticate(user=self.owner)
+        new_subject = Subject.objects.create(tenant=self.tenant, name="Science", code="SCI")
+        new_assignment = TeachingAssignment.objects.create(
+            tenant=self.tenant, school_class=self.school_class, subject=new_subject, teacher=self.teacher
+        )
+        stale = self.client.post(reports + report_id + "/publish/", {}, format="json")
+        self.assertEqual(stale.status_code, 400, stale.data)
+        self.assertIn("Class subjects have changed", str(stale.data))
+        new_assignment.delete()
         self.assertEqual(self.client.post(reports + report_id + "/publish/", {}, format="json").status_code, 200)
         self.assertEqual(self.client.post(reports + report_id + "/publish/", {}, format="json").status_code, 400)
         self.client.force_authenticate(user=self.parent)
@@ -462,9 +488,11 @@ class ExaminationTests(AcademicFixture, TestCase):
                    "class_teacher_remark": "Good work", "headteacher_remark": "Keep it up"}
         self.client.force_authenticate(user=self.head)
         another_subject = Subject.objects.create(tenant=self.tenant, name="Science", code="SCI")
-        enrollment.subjects.add(another_subject)
+        assignment = TeachingAssignment.objects.create(
+            tenant=self.tenant, school_class=self.school_class, subject=another_subject, teacher=self.teacher
+        )
         self.assertEqual(self.client.post(reports, payload, format="json").status_code, 400)
-        enrollment.subjects.remove(another_subject)
+        assignment.delete()
         another_class = SchoolClass.objects.create(tenant=self.tenant, academic_year=self.year, name="Grade 2")
         overlap = StudentEnrollment.objects.create(
             tenant=self.tenant, student=self.student, school_class=another_class, enrolled_on=date(2026, 2, 1),

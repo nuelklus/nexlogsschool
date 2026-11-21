@@ -12,6 +12,7 @@ import TermClosurePanel from "./term-closure-panel";
 import ClassLevelsPanel from "./class-levels-panel";
 import AttendancePanel from "./attendance-panel";
 import ExaminationPanel from "./examination-panel";
+import ClassEnrollmentForm from "./class-enrollment-form";
 import { Student, listStudents } from "../school/student-api";
 import {
   AcademicCollection,
@@ -425,22 +426,17 @@ function AcademicWorkspace({
               )}
               {active === "enrollment" && (
                 <section className="academic-card">
-                  {canManage && <AcademicForm title="Enroll student in a class" submitLabel="Enroll student" onSubmit={(data) => save("enrollments", data)} fields={[
-                    { name: "student", label: "Student", type: "select", options: students.map((student) => ({ value: student.id, label: `${student.first_name} ${student.last_name} · ${student.admission_number}` })) },
-                    { name: "school_class", label: "Class", type: "select", options: schoolClassOptions },
-                    { name: "subjects", label: "Subjects", type: "multiselect", options: subjectOptions, required: false },
-                    { name: "enrolled_on", label: "Enrollment date", type: "date" },
-                  ]} />}
+                  {canManage && <ClassEnrollmentForm students={students} classes={classes} years={years} enrollments={enrollments}
+                    subjects={subjects} assignments={assignments} onCreate={(data) => save("enrollments", data)} />}
                   {canManage && (
                     <>
-                      <p className="fin-note">Transfers keep the original enrollment and its attendance and results. Select only subjects assigned to the destination class. Existing invoices do not change; finance still uses the student&apos;s current grade for future billing.</p>
+                      <p className="fin-note">Transfers keep the original enrollment and its attendance and results. The student follows all subjects assigned to the destination class. Existing invoices do not change; finance still uses the student&apos;s current grade for future billing.</p>
                       <AcademicForm title="Transfer student to another class" submitLabel="Transfer student" onSubmit={async (data) => {
                         await transferClass(authFetch, tenantId, data);
                         await refresh();
                       }} fields={[
                         { name: "enrollment", label: "Current enrollment", type: "select", options: transferOptions },
                         { name: "target_class", label: "Destination class", type: "select", options: schoolClassOptions },
-                        { name: "subjects", label: "Destination subjects", type: "multiselect", options: subjectOptions, required: false },
                         { name: "effective_date", label: "Effective date", type: "date" },
                         { name: "reason", label: "Reason for transfer" },
                       ]} />

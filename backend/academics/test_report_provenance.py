@@ -6,7 +6,7 @@ from rest_framework.exceptions import ValidationError
 
 from .models import (
     Assessment, AssessmentResult, AttendanceRecord, EnrollmentProvenanceAttestation, Examination, ExaminationPublication,
-    ExaminationSession, GradingConfiguration, SchoolClass, StudentEnrollment, Subject,
+    ExaminationSession, GradingConfiguration, SchoolClass, StudentEnrollment,
 )
 from .report_provenance import inspect_segment
 from .tests import AcademicFixture
@@ -129,9 +129,12 @@ class ReportProvenanceInspectionTests(AcademicFixture, TestCase):
         self.assertNotEqual(first, self.inspect().fingerprint)
 
     def test_superseded_attestation_is_rejected(self):
-        payload = {**self.attestation_payload, "previous_attestation": self.attestation,
-                   "subjects": [str(self.subject.pk), str(Subject.objects.create(
-                       tenant=self.tenant, name="English", code="ENG").pk)]}
+        revoked = self.client.post(
+            self.base + f"enrollment-provenance/{self.attestation}/revoke/",
+            {"reason": "Recheck"}, format="json"
+        )
+        self.assertEqual(revoked.status_code, 201, revoked.data)
+        payload = {**self.attestation_payload, "previous_attestation": self.attestation}
         response = self.client.post(self.base + "enrollment-provenance/attest/", payload, format="json")
         self.assertEqual(response.status_code, 201, response.data)
         with self.assertRaises(ValidationError):
@@ -173,7 +176,7 @@ class ReportProvenanceInspectionTests(AcademicFixture, TestCase):
             self.inspect()
 
     def test_source_subjects_and_campus_changes_invalidate_attestation(self):
-        self.source.subjects.clear()
+        self.source.subjects.add(self.subject)
         with self.assertRaises(ValidationError):
             self.inspect()
 

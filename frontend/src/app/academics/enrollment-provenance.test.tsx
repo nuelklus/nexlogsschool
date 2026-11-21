@@ -11,7 +11,7 @@ const props = {
 };
 const row = { enrollment: "one", student: "Ama", admission_number: "A1", segment_start: "2026-01-05",
   segment_end: "2026-03-19", fingerprint: "a".repeat(64), issues: ["campus_requires_attestation"],
-  blocking: [], original: { campus: null, subjects: [] }, attestation: null, attestation_history: [] };
+  blocking: [], original: { campus: null, subjects: [], class_subjects: ["subject"] }, attestation: null, attestation_history: [] };
 
 it("requires explicit evidence and reports a saved attestation without claiming reports are enabled", async () => {
   const fetch = vi.fn(async (path: string, init?: RequestInit) => {

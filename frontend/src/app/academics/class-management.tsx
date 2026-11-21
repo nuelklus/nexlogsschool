@@ -43,7 +43,7 @@ function ClassSettings({ schoolClass, year, teachers, campuses, authFetch, tenan
   }
 
   return (
-    <form className="academic-form" onSubmit={submit}>
+    <form className="academic-form class-setup-item" onSubmit={submit}>
       <h3>{label}</h3>
       <label>Class teacher for {label}
         <select value={teacher} onChange={(event) => setTeacher(event.target.value)}>
@@ -84,7 +84,7 @@ export default function ClassManagement({ classes, years, teachers, campuses = [
   onUpdated: (updated: SchoolClass) => void;
 }) {
   return (
-    <section aria-label="Manage class groups">
+    <section className="class-setup-section" aria-label="Manage class groups">
       <h2>Manage class groups</h2>
       <p className="fin-note">Archiving keeps existing records but prevents new enrollments, transfers and promotions into the class.</p>
       {classes.map((schoolClass) => (

@@ -110,6 +110,7 @@ describe("AddStudentPage", () => {
     expect(screen.getByText("Generated automatically")).toBeInTheDocument();
     await user.type(screen.getByLabelText("First name"), "Kojo");
     await user.type(screen.getByLabelText("Last name"), "Asare");
+    await user.selectOptions(screen.getByLabelText("Gender"), "Female");
     await screen.findByRole("option", { name: "2026/2027" });
     await user.selectOptions(screen.getByLabelText("Class group"), "c1");
     await user.type(screen.getByLabelText("Enrollment date"), "2026-09-10");
@@ -124,6 +125,7 @@ describe("AddStudentPage", () => {
     expect(JSON.parse(post?.[1]?.body as string)).toEqual({
       first_name: "Kojo",
       last_name: "Asare",
+      gender: "Female",
       enrolled_on: "2026-09-10",
       initial_academic_year: "y1",
       initial_school_class: "c1",

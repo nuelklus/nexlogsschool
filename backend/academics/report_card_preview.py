@@ -11,6 +11,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .class_subjects import class_subject_ids
 from .examinations import LEADERS, _member
 from .models import AcademicTerm, AttendanceRecord, Examination, ExaminationPublication, StudentEnrollment
 
@@ -51,6 +52,8 @@ def _preview(tenant_id, data):
         raise ValidationError({"examinations": "All selected examinations must be published for this class and term."})
     if len({exam.subject_id for exam in exams}) != len(exams):
         raise ValidationError({"examinations": "Select at most one examination per subject."})
+    if not {exam.subject_id for exam in exams}.issubset(set(class_subject_ids(tenant_id, enrollment.school_class_id))):
+        raise ValidationError({"examinations": "Every selected subject must be assigned to this class."})
     if any(
         exam.start_date < enrollment.enrolled_on
         or (enrollment.ended_on is not None and exam.start_date > enrollment.ended_on)

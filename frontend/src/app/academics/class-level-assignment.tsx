@@ -42,7 +42,7 @@ function ClassAssignment({ schoolClass, levels, year, authFetch, tenantId, onUpd
   }
 
   return (
-    <form className="academic-form" onSubmit={submit}>
+    <form className="academic-form class-setup-item" onSubmit={submit}>
       <label>{label}
         <select value={selected} onChange={(event) => setSelected(event.target.value)}>
           <option value="">Not assigned</option>
@@ -87,7 +87,7 @@ export default function ClassLevelAssignment({ authFetch, tenantId, classes, yea
   }, [authFetch, tenantId, attempt]);
 
   return (
-    <section aria-label="Assign class levels">
+    <section className="class-setup-section" aria-label="Assign class levels">
       <h2>Assign levels to classes</h2>
       <p className="fin-note">Choose a level for each existing class. This does not change students, billing or class names.</p>
       {error && <><p className="setup-error" role="alert">{error}</p><button type="button" onClick={() => setAttempt((value) => value + 1)}>Retry</button></>}

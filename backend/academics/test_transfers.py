@@ -49,7 +49,7 @@ class ClassTransferTests(AcademicFixture, TestCase):
         self.assertEqual(AssessmentResult.objects.get(pk=result.pk).enrollment_id, source.pk)
         new = StudentEnrollment.objects.get(pk=response.data["enrollment"]["id"])
         self.assertEqual(new.enrolled_on, date(2026, 4, 1))
-        self.assertEqual(list(new.subjects.all()), [self.subject])
+        self.assertEqual(response.data["enrollment"]["subjects"], [self.subject.pk])
         self.assertEqual(self.student.grade_level, "Grade 2")
         self.assertTrue(AuditEvent.objects.filter(
             tenant=self.tenant, action="academic.enrollment.transferred", entity_id=str(new.pk)

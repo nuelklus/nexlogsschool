@@ -12,6 +12,7 @@ from .models import (
     ExaminationPublication, StudentEnrollment, Subject,
 )
 from .provenance import _context
+from .class_subjects import class_subject_ids
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,8 @@ def inspect_segment(tenant_id, term_id, enrollment_id, attestation_id, examinati
         tenant_id=tenant_id, pk__in=subject_ids,
     ).count() != len(subject_ids):
         raise ValidationError({"attestation": "The attested subjects are inconsistent with this school."})
+    if set(subject_ids) != set(class_subject_ids(tenant_id, enrollment.school_class_id)):
+        raise ValidationError({"attestation": "The attested subjects must match all subjects assigned to this class."})
 
     if not examination_ids or len(set(examination_ids)) != len(examination_ids):
         raise ValidationError({"examinations": "Select each required subject examination exactly once."})

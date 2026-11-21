@@ -61,6 +61,34 @@ python manage.py collectstatic --noinput
 `ImproperlyConfigured` for any weak setting, so read the message and fix the
 `.env` value it names.
 
+### Subject enrollment conversion
+
+Subject membership is derived from each enrollment's class-subject teaching
+assignments, rather than stored separately for each student. Subjects and
+assignments do not currently have an active/inactive flag: an existing
+assignment is treated as active. This deployment changes effective subject
+membership immediately, including for past enrollments. Existing published
+results and report snapshots are not deleted or rewritten, but later reviews
+use the current class assignments. Review pending reports and provenance
+attestations before deployment.
+
+Back up the database and stop application writes during conversion. For each
+school, run the command below first without `--apply`, review its counts,
+then repeat with `--apply`:
+
+```bash
+python manage.py standardize_class_subjects SCHOOL_SLUG
+python manage.py standardize_class_subjects SCHOOL_SLUG --apply
+```
+
+The report counts effective memberships added, retained and removed compared
+with the old rules, changed enrollments, and legacy restriction rows. The
+command deletes only legacy enrollment-to-subject links for the named school;
+it creates no physical membership rows because class assignments are the
+source of truth. It is safe to rerun. Inconsistent school ownership blocks the
+conversion and requires reconciliation. Never run the conversion concurrently
+with older application versions that still write subject restrictions.
+
 `/etc/systemd/system/nlschool-api.service`:
 ```ini
 [Unit]

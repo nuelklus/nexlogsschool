@@ -11,6 +11,7 @@ from core.enrollment import _audit, _membership
 from core.models import Student
 
 from .campus import validate_same_campus
+from .class_subjects import class_subject_ids
 from .models import AcademicTerm, AssessmentResult, AttendanceRecord, SchoolClass, StudentEnrollment, TeachingAssignment
 from .views import MANAGE_ROLES, StudentEnrollmentSerializer
 
@@ -82,6 +83,8 @@ class ClassTransferView(APIView):
                 ).values_list("subject_id", flat=True))
                 if assigned != subjects:
                     raise ValidationError({"subjects": "Select only subjects assigned to the destination class."})
+                if subjects and subjects != set(class_subject_ids(tenant_id, target.pk)):
+                    raise ValidationError({"subjects": "Students follow all subjects assigned to the destination class; do not select a subset."})
                 if AttendanceRecord.objects.filter(enrollment=source, date__gte=day).exists():
                     raise ValidationError({"effective_date": "Attendance exists on or after this date; review it before transferring."})
                 if AssessmentResult.objects.filter(enrollment=source, assessment__assessment_date__gte=day).exists():
@@ -94,7 +97,6 @@ class ClassTransferView(APIView):
                     campus=target.campus or student.campus,
                     school_class=target, enrolled_on=day
                 )
-                destination.subjects.set(subjects)
                 if year.is_current:
                     student.grade_level = target.name
                     changed_fields = ["grade_level", "updated_at"]

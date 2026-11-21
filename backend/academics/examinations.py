@@ -13,6 +13,7 @@ from rest_framework.views import APIView
 from core.enrollment import _audit, _membership
 from core.models import Membership, Student, StudentGuardian
 
+from .class_subjects import class_subject_ids
 from .grading import Component, GradeBand, GradingError, GradingPolicy, Mark, MarkStatus, RoundingRule, calculate_subject
 from .models import (
     AcademicTerm, Assessment, AssessmentResult, Examination, ExaminationPublication, ExaminationSession,
@@ -71,14 +72,14 @@ def _policy(configuration):
 
 
 def _roster(exam):
+    if exam.subject_id not in class_subject_ids(exam.tenant_id, exam.school_class_id):
+        raise ValidationError({"subject": "This subject is no longer assigned to the class. Restore the assignment before managing its examination."})
     enrollments = StudentEnrollment.objects.filter(
         tenant_id=exam.tenant_id, school_class=exam.school_class,
         enrolled_on__lte=exam.start_date,
     ).filter(
         Q(status=StudentEnrollment.Status.ACTIVE, ended_on__isnull=True)
         | Q(ended_on__gte=exam.start_date)
-    ).filter(
-        Q(subjects__isnull=True) | Q(subjects=exam.subject)
     )
     if (enrollments.exclude(student__tenant_id=exam.tenant_id).exists()
             or enrollments.filter(campus__isnull=False).exclude(campus__tenant_id=exam.tenant_id).exists()

@@ -199,12 +199,11 @@ class PromotionView(APIView):
                         {"decisions": f"Choose a class in the new year for {student.first_name} {student.last_name}."}
                     )
                 validate_same_campus(tenant_id, student, enrollment, destination, "decisions")
-                created = StudentEnrollment.objects.create(
+                StudentEnrollment.objects.create(
                     tenant_id=tenant_id, student=student,
                     campus=destination.campus or student.campus, school_class=destination,
                     enrolled_on=target.start_date,
                 )
-                created.subjects.set(enrollment.subjects.all())
                 counts[action] += 1
 
             if data.get("make_current") is True:

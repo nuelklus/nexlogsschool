@@ -111,7 +111,15 @@ function EnrolForm({ onEnrol, authFetch, tenantId }: { onEnrol: (data: FormData)
         <legend>Details</legend>
         <div className="enrol-grid">
           <label>Date of birth<input name="date_of_birth" type="date" /></label>
-          <label>Gender<input name="gender" maxLength={20} /></label>
+          <label>Gender
+            <select name="gender" defaultValue="">
+              <option value="">Select gender (optional)</option>
+              <option value="Female">Female</option>
+              <option value="Male">Male</option>
+              <option value="Other">Other</option>
+              <option value="Prefer not to say">Prefer not to say</option>
+            </select>
+          </label>
           <label>Academic year
             <select name="initial_academic_year" required value={yearId} onChange={(event) => {
               setYearId(event.target.value);

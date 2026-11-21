@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 
 from core.enrollment import _audit
 from core.models import Campus, Student
+from .class_subjects import class_subject_ids
 from .examinations import _member
 from .models import (
     AcademicTerm, AssessmentResult, EnrollmentProvenanceAttestation, EnrollmentProvenanceRevocation, ExaminationPublication,
@@ -224,6 +225,10 @@ class ProvenanceAttestationView(APIView):
             enrollment = StudentEnrollment.objects.select_for_update(of=("self",)).select_related("student", "school_class", "campus").get(
                 pk=data["enrollment"], tenant_id=tenant_id,
             )
+            if not SchoolClass.objects.select_for_update().filter(
+                pk=enrollment.school_class_id, tenant_id=tenant_id
+            ).exists():
+                raise ValidationError({"enrollment": "The enrollment class does not belong to this school."})
             if enrollment.school_class.academic_year_id != term.academic_year_id or enrollment.enrolled_on > term.end_date or (
                 enrollment.ended_on and enrollment.ended_on < term.start_date
             ):
@@ -252,6 +257,8 @@ class ProvenanceAttestationView(APIView):
             }
             if not recorded_subjects.issubset(set(subject_ids)):
                 raise ValidationError({"subjects": "Recorded term results conflict with the confirmed subject list; reconcile the records first."})
+            if set(data["subjects"]) != set(class_subject_ids(tenant_id, enrollment.school_class_id)):
+                raise ValidationError({"subjects": "Confirm all subjects currently assigned to the class."})
             versions = EnrollmentProvenanceAttestation.objects.filter(tenant_id=tenant_id, term=term, enrollment=enrollment)
             latest = versions.order_by("-version").first()
             if (latest.pk if latest else None) != data["previous_attestation"]:

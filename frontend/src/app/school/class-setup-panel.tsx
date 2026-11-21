@@ -62,15 +62,23 @@ function ClassGroups({ tenantId, authFetch, campusVersion }: { tenantId: string;
             setError(`The class was created, but refreshing failed. Retry before creating another class. ${caught instanceof Error ? caught.message : "Classes could not be loaded."}`);
           }
         }} />
-        <h2>Classes</h2>
-        {data.classes.length === 0 ? <p className="academic-empty">No classes have been added.</p> : (
-          <ul className="academic-records">
-            {data.classes.map((item) => <li key={item.id}>
-              <strong>{item.name}{item.section ? ` · ${item.section}` : ""}</strong>
-              <span>{data.years.find((year) => year.id === item.academic_year)?.name ?? "Year"} · {data.campuses.find((campus) => campus.id === item.campus)?.name ?? "No campus assigned"}{item.room ? ` · Room ${item.room}` : ""}{item.is_active === false ? " · Archived" : ""}</span>
-            </li>)}
-          </ul>
-        )}
+        <section className="class-setup-section class-setup-directory" aria-label="Class list">
+          <div className="class-setup-item-heading">
+            <h2>Class list</h2>
+            <span className="class-setup-badge">{data.classes.length} {data.classes.length === 1 ? "class" : "classes"}</span>
+          </div>
+          {data.classes.length === 0 ? <p className="academic-empty">No classes have been added yet. Create a class above to get started.</p> : (
+            <ul className="academic-records">
+              {data.classes.map((item) => <li key={item.id}>
+                <div className="class-setup-item-heading">
+                  <strong>{item.name}{item.section ? ` · ${item.section}` : ""}</strong>
+                  <span className={`class-setup-badge${item.is_active === false ? " is-muted" : ""}`}>{item.is_active === false ? "Archived" : "Active"}</span>
+                </div>
+                <span>{data.years.find((year) => year.id === item.academic_year)?.name ?? "Year"} · {data.campuses.find((campus) => campus.id === item.campus)?.name ?? "No campus assigned"}{item.room ? ` · Room ${item.room}` : ""}</span>
+              </li>)}
+            </ul>
+          )}
+        </section>
         <ClassManagement authFetch={authFetch} tenantId={tenantId} classes={data.classes} years={data.years} teachers={data.teachers} campuses={data.campuses} onUpdated={updated} />
         <ClassLevelAssignment authFetch={authFetch} tenantId={tenantId} classes={data.classes} years={data.years} onUpdated={updated} />
         <ClassReconciliation authFetch={authFetch} tenantId={tenantId} />
@@ -82,11 +90,18 @@ function ClassGroups({ tenantId, authFetch, campusVersion }: { tenantId: string;
 export default function ClassSetupPanel({ tenantId, authFetch, campusVersion = 0 }: { tenantId: string; authFetch: AuthFetch; campusVersion?: number }) {
   const [active, setActive] = useState<"levels" | "classes">("levels");
   return (
-    <section className="academic-card" id="class-setup" aria-label="School class setup">
-      <p className="eyebrow">SCHOOL SETUP</p>
-      <h2>Class levels &amp; classes</h2>
-      <p className="fin-note">Set up levels and class groups for use across your school.</p>
-      <nav className="finance-tabs" aria-label="Class setup sections">
+    <section className="academic-card class-setup-panel" id="class-setup" aria-label="School class setup">
+      <div className="class-setup-intro">
+        <p className="eyebrow">SCHOOL SETUP</p>
+        <h2>Class levels &amp; classes</h2>
+        <p className="fin-note">Organize the levels your school offers and the class groups students can join.</p>
+        <ol className="class-setup-steps" aria-label="Recommended setup order">
+          <li><strong>1. Set up levels</strong><span>Choose or name the levels your school offers.</span></li>
+          <li><strong>2. Create classes</strong><span>Choose an academic year and campus for each class.</span></li>
+          <li><strong>3. Assign and manage</strong><span>Link classes to levels and manage teachers or active status.</span></li>
+        </ol>
+      </div>
+      <nav className="academic-tabs" aria-label="Class setup sections">
         <button type="button" className={active === "levels" ? "active" : ""} aria-pressed={active === "levels"} onClick={() => setActive("levels")}>Class levels</button>
         <button type="button" className={active === "classes" ? "active" : ""} aria-pressed={active === "classes"} onClick={() => setActive("classes")}>Classes</button>
       </nav>

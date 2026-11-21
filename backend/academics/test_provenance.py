@@ -7,7 +7,7 @@ from django.db.models.deletion import ProtectedError
 from core.models import AcademicYear, AuditEvent, Campus, Membership, StudentGuardian
 from .models import (
     AssessmentResult, EnrollmentProvenanceAttestation, EnrollmentProvenanceRevocation, Examination, ExaminationPublication,
-    GradingConfiguration, ReportCardVersion, SchoolClass, StudentEnrollment, Subject,
+    GradingConfiguration, ReportCardVersion, SchoolClass, StudentEnrollment, Subject, TeachingAssignment,
 )
 from .tests import AcademicFixture
 
@@ -20,6 +20,9 @@ class EnrollmentProvenanceTests(AcademicFixture, TestCase):
         self.source.ended_on = date(2026, 3, 19)
         self.source.save(update_fields=("status", "ended_on"))
         self.destination_class = SchoolClass.objects.create(tenant=self.tenant, academic_year=self.year, name="Grade 2")
+        TeachingAssignment.objects.create(
+            tenant=self.tenant, school_class=self.destination_class, subject=self.subject, teacher=self.teacher
+        )
         self.destination = StudentEnrollment.objects.create(
             tenant=self.tenant, student=self.student, school_class=self.destination_class, enrolled_on=date(2026, 3, 20),
         )

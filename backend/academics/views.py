@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 from core.enrollment import _audit, _membership
 from core.models import AcademicYear, Campus, Membership, Student, User
 
+from .class_subjects import class_subject_ids
 from .models import (
     AcademicTerm,
     Assessment,
@@ -170,13 +171,27 @@ class StudentEnrollmentSerializer(TenantSerializer):
         self.fields["student"].queryset = Student.objects.filter(tenant_id=tenant_id)
         self.fields["subjects"].child_relation.queryset = Subject.objects.filter(tenant_id=tenant_id)
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        subjects_by_class = self.context.get("subjects_by_class")
+        data["subjects"] = (
+            subjects_by_class.get(instance.school_class_id, [])
+            if subjects_by_class is not None
+            else list(class_subject_ids(self.context["tenant_id"], instance.school_class_id))
+        )
+        return data
+
+    def create(self, validated_data):
+        validated_data.pop("subjects", None)
+        return super().create(validated_data)
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
         if not self.instance and attrs.get("status") == StudentEnrollment.Status.TRANSFERRED:
             raise serializers.ValidationError({"status": "Use the transfer workflow to transfer an enrollment."})
         school_class = attrs.get("school_class", getattr(self.instance, "school_class", None))
         student = attrs.get("student", getattr(self.instance, "student", None))
-        subjects = attrs.get("subjects", list(self.instance.subjects.all()) if self.instance else [])
+        subjects = attrs.get("subjects", [])
         if school_class and student and StudentEnrollment.objects.filter(
             tenant_id=self.context["tenant_id"],
             student=student,
@@ -196,6 +211,10 @@ class StudentEnrollmentSerializer(TenantSerializer):
             if assigned != {subject.pk for subject in subjects}:
                 raise serializers.ValidationError(
                     {"subjects": "Select only subjects assigned to this class."}
+                )
+            if assigned != set(class_subject_ids(self.context["tenant_id"], school_class.pk)):
+                raise serializers.ValidationError(
+                    {"subjects": "Students follow all subjects assigned to their class; do not select a subset."}
                 )
         if school_class and student:
             if (
@@ -370,18 +389,25 @@ class AcademicCollectionView(APIView):
             raise NotFound()
         model = serializer_class.Meta.model
         queryset = model.objects.filter(tenant_id=tenant_id)
+        context = {"tenant_id": tenant_id}
         if collection == "assessments":
             queryset = queryset.filter(examination__isnull=True)
         elif collection == "results":
             queryset = queryset.filter(assessment__examination__isnull=True)
         if collection == "enrollments":
-            queryset = queryset.select_related("student", "school_class")
+            queryset = queryset.select_related("student", "school_class").prefetch_related("subjects")
+            subjects_by_class = {}
+            for class_id, subject_id in TeachingAssignment.objects.filter(
+                tenant_id=tenant_id, school_class__tenant_id=tenant_id, subject__tenant_id=tenant_id,
+            ).values_list("school_class_id", "subject_id"):
+                subjects_by_class.setdefault(class_id, []).append(subject_id)
+            context["subjects_by_class"] = subjects_by_class
         elif collection == "attendance":
             queryset = queryset.select_related("enrollment__student", "enrollment__school_class")
         elif collection == "teacher-assignments":
             queryset = queryset.select_related("school_class", "subject", "teacher")
         return Response(
-            serializer_class(queryset, many=True, context={"tenant_id": tenant_id}).data
+            serializer_class(queryset, many=True, context=context).data
         )
 
     def post(self, request, tenant_id, collection):
@@ -425,6 +451,13 @@ class AcademicCollectionView(APIView):
                     if campus is None:
                         raise ValidationError({"campus": "This campus is no longer active. Choose an active campus."})
                     serializer.validated_data["campus"] = campus
+                if collection == "teacher-assignments":
+                    school_class = SchoolClass.objects.select_for_update().filter(
+                        pk=serializer.validated_data["school_class"].pk, tenant_id=tenant_id
+                    ).first()
+                    if school_class is None:
+                        raise ValidationError({"school_class": "The class no longer exists. Reload and retry."})
+                    serializer.validated_data["school_class"] = school_class
                 if collection in ("attendance", "results"):
                     enrollment = serializer.validated_data["enrollment"]
                     Student.objects.select_for_update().get(pk=enrollment.student_id, tenant_id=tenant_id)

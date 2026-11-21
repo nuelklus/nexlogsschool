@@ -13,8 +13,9 @@ from core.enrollment import _audit
 from core.models import Membership, Student, StudentGuardian
 from .examinations import LEADERS, _member
 from .models import (
-    AcademicTerm, Examination, ExaminationPublication, ReportCardVersion, StudentEnrollment, TeachingAssignment,
+    AcademicTerm, Examination, ExaminationPublication, ReportCardVersion, StudentEnrollment,
 )
+from .class_subjects import class_subject_ids
 from .report_card_preview import ReportCardPreviewSerializer, _pdf, _preview
 from .report_campus import lock_report_campus, retry_provenance_conflicts
 from .views import MANAGE_ROLES
@@ -67,16 +68,12 @@ def _review_report(request, tenant_id, term, data):
     provenance = lock_report_campus(tenant_id, term, data["enrollment"], request.user.pk)
     snapshot = _preview(tenant_id, data)
     enrollment = StudentEnrollment.objects.select_related("school_class").get(pk=data["enrollment"], tenant_id=tenant_id)
-    required = set(enrollment.subjects.values_list("pk", flat=True))
-    if not required:
-        required = set(TeachingAssignment.objects.filter(
-            tenant_id=tenant_id, school_class=enrollment.school_class, subject__tenant_id=tenant_id,
-        ).values_list("subject_id", flat=True))
+    required = set(class_subject_ids(tenant_id, enrollment.school_class_id))
     selected = set(Examination.objects.filter(
         tenant_id=tenant_id, pk__in=data["examinations"],
     ).values_list("subject_id", flat=True))
     if not required or selected != required:
-        raise ValidationError({"examinations": "Select one published examination for every enrolled subject (or assigned class subject if none are specified)."})
+        raise ValidationError({"examinations": "Select one published examination for every subject assigned to the class."})
     versions = ReportCardVersion.objects.filter(tenant_id=tenant_id, term=term, student=enrollment.student)
     if versions.filter(status=ReportCardVersion.Status.REVIEWED).exists():
         raise ValidationError({"detail": "A reviewed version already awaits publication."})
@@ -161,7 +158,7 @@ class ReportCardPublishView(APIView):
             if not isinstance(report.snapshot, dict) or report.snapshot.get("_provenance") != provenance:
                 raise ValidationError({"enrollment": "Report provenance changed or was not verified; withdraw this review and prepare a new one."})
             ids = [row["publication_id"] for row in report.snapshot["results"]]
-            current = ExaminationPublication.objects.filter(
+            publications = ExaminationPublication.objects.filter(
                 tenant_id=tenant_id, pk__in=ids, enrollment_id=report.enrollment_id,
                 examination__tenant_id=tenant_id, examination__term=term,
                 examination__school_class_id=F("enrollment__school_class_id"),
@@ -170,9 +167,12 @@ class ReportCardPublishView(APIView):
             ).filter(
                 Q(enrollment__ended_on__gte=F("examination__start_date"))
                 | Q(enrollment__ended_on__isnull=True, enrollment__status=StudentEnrollment.Status.ACTIVE)
-            ).count()
-            if current != len(ids):
+            )
+            current_subjects = set(publications.values_list("examination__subject_id", flat=True))
+            if publications.count() != len(ids):
                 raise ValidationError({"detail": "Published subject results or enrollment dates have changed since review; prepare a new review."})
+            if current_subjects != set(class_subject_ids(tenant_id, report.enrollment.school_class_id)):
+                raise ValidationError({"detail": "Class subjects have changed since review; withdraw this review and prepare a new one."})
             report.status = ReportCardVersion.Status.PUBLISHED
             report.published_by = request.user
             report.published_at = timezone.now()

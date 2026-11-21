@@ -135,7 +135,8 @@ export default function EnrollmentProvenance({ authFetch, tenantId, terms, class
         <label>Verified campus <select name="campus" required defaultValue=""><option value="">Select based on evidence</option>
           <option value="none">Confirmed no campus</option>{report.campuses.map((campus) => <option key={campus.id} value={campus.id}>{campus.name}</option>)}
         </select></label>
-        <fieldset><legend>Verified subjects for this segment</legend>{subjects.map((subject) =>
+        <fieldset><legend>Confirm all subjects currently assigned to this class</legend>{subjects.filter((subject) =>
+          strings(row.original.class_subjects) && row.original.class_subjects.includes(subject.id)).map((subject) =>
           <label key={subject.id}><input type="checkbox" name="subjects" value={subject.id} />{subject.name} · {subject.code}</label>)}</fieldset>
         <label>Reconciliation reason <input name="reason" maxLength={500} required /></label>
         <label>Supporting evidence or reference <input name="evidence" maxLength={1000} required /></label>

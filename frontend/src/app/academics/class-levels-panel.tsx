@@ -134,10 +134,10 @@ export default function ClassLevelsPanel({ authFetch, tenantId, canManage }: {
 
   const unused = catalogue.filter((item) => !levels.some((level) => level.catalogue_level === item.code));
   return (
-    <section className="academic-card" aria-label="Class levels">
+    <section className="academic-card class-setup-section" aria-label="Class levels">
       <h2>School class levels</h2>
-      <p className="fin-note">Choose the levels your school offers or add a custom level. This setup does not yet change existing classes or finance.</p>
-      <p className="fin-note">Mark one active level as the terminal level for graduation suggestions. Clear the current terminal level before selecting another.</p>
+      <p className="fin-note">Add the levels your school offers, then assign them to class groups in the Classes tab. Changing levels does not change existing classes or finance.</p>
+      <p className="fin-note">You can mark one active level as the terminal graduation level. Clear the current terminal level before choosing another.</p>
       {loading && <p role="status">Loading class levels…</p>}
       {error && <p className="setup-error" role="alert">{error}</p>}
       {message && <p className="academic-success" role="status">{message}</p>}
@@ -145,7 +145,7 @@ export default function ClassLevelsPanel({ authFetch, tenantId, canManage }: {
       {!loading && hasLoaded && (
         <>
           {canManage && (
-            <form className="academic-form" onSubmit={add}>
+            <form className="academic-form class-setup-item" onSubmit={add}>
               <h2>Add a level</h2>
               <div className="academic-form-grid">
                 <label>Ghana catalogue level
@@ -164,23 +164,33 @@ export default function ClassLevelsPanel({ authFetch, tenantId, canManage }: {
               <button className="setup-submit" disabled={busy} type="submit">Add level</button>
             </form>
           )}
-          {levels.length === 0 ? <p className="academic-empty">No class levels configured yet.</p> : levels.map((level) => (
-            <form className="academic-form" key={level.id} onSubmit={(event) => edit(event, level)}>
-              <h2>{level.display_name}</h2>
-              <p className="fin-note">{level.catalogue_name ? `Ghana catalogue: ${level.catalogue_name}` : "Custom school level"}</p>
-              {canManage ? (
-                <>
-                  <div className="academic-form-grid">
-                    <label>Display name<input name="display_name" defaultValue={level.display_name} required maxLength={80} /></label>
-                    <label>Sort order<input name="sort_order" type="number" min="0" defaultValue={level.sort_order} required /></label>
-                    <label><span className="academic-checkbox"><input name="is_active" type="checkbox" defaultChecked={level.is_active} />Active</span></label>
-                    <label><span className="academic-checkbox"><input name="is_terminal" type="checkbox" defaultChecked={level.is_terminal} />Terminal graduation level</span></label>
+          {levels.length === 0 ? <p className="academic-empty">No class levels configured yet.</p> : (
+            <div className="class-setup-level-list">
+              {levels.map((level) => (
+                <form className="academic-form class-setup-item" key={level.id} onSubmit={(event) => edit(event, level)}>
+                  <div className="class-setup-item-heading">
+                    <h2>{level.display_name}</h2>
+                    <div className="class-setup-badges">
+                      <span className={`class-setup-badge${level.is_active ? "" : " is-muted"}`}>{level.is_active ? "Active" : "Archived"}</span>
+                      {level.is_terminal && <span className="class-setup-badge">Terminal level</span>}
+                    </div>
                   </div>
-                  <button className="setup-submit" disabled={busy} type="submit">Save {level.display_name}</button>
-                </>
-              ) : <p>{level.is_active ? "Active" : "Archived"}{level.is_terminal ? " · Terminal level" : ""}</p>}
-            </form>
-          ))}
+                  <p className="fin-note">{level.catalogue_name ? `Ghana catalogue: ${level.catalogue_name}` : "Custom school level"}</p>
+                  {canManage ? (
+                    <>
+                      <div className="academic-form-grid">
+                        <label>Display name<input name="display_name" defaultValue={level.display_name} required maxLength={80} /></label>
+                        <label>Sort order<input name="sort_order" type="number" min="0" defaultValue={level.sort_order} required /></label>
+                        <label><span className="academic-checkbox"><input name="is_active" type="checkbox" defaultChecked={level.is_active} />Active</span></label>
+                        <label><span className="academic-checkbox"><input name="is_terminal" type="checkbox" defaultChecked={level.is_terminal} />Terminal graduation level</span></label>
+                      </div>
+                      <button className="setup-submit" disabled={busy} type="submit">Save {level.display_name}</button>
+                    </>
+                  ) : null}
+                </form>
+              ))}
+            </div>
+          )}
         </>
       )}
     </section>

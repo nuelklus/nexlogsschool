@@ -2,6 +2,9 @@
 
 NLSchool is a multitenant school-management SaaS. This repository is a fresh reconstruction from a partial recovery bundle, not a restored copy of the original repository.
 
+For step-by-step guidance for school staff, parents and students, see the
+[NLSchool user guide](docs/USER_GUIDE.md).
+
 ## Structure
 
 - `frontend/`: Next.js App Router application with TypeScript and Tailwind CSS.

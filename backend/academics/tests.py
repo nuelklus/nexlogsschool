@@ -315,6 +315,10 @@ class PromotionTests(AcademicFixture, TestCase):
                 self.assertIn("source_class", response.data)
 
     def test_apply_promotes_repeats_and_makes_year_current(self):
+        destination_subject = Subject.objects.create(tenant=self.tenant, name="Science", code="SCI")
+        TeachingAssignment.objects.create(
+            tenant=self.tenant, school_class=self.grade2, subject=destination_subject, teacher=self.teacher
+        )
         response = self.client.post(
             self.url,
             {**self.params(), "make_current": True,
@@ -326,6 +330,9 @@ class PromotionTests(AcademicFixture, TestCase):
         self.student.refresh_from_db()
         self.assertEqual(self.student.grade_level, "Grade 2")
         self.assertTrue(AcademicYear.objects.get(pk=self.next_year.pk).is_current)
+        destination = next(row for row in self.client.get(self.base + "enrollments/").data
+                           if row["school_class"] == self.grade2.pk)
+        self.assertEqual(destination["subjects"], [destination_subject.pk])
         self.assertTrue(self.client.get(self.url, self.params()).data["rows"][0]["already_enrolled"])
 
     def test_promotion_rejects_missing_or_conflicting_campus(self):
