@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import timedelta
 
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q, Subquery
 from django.utils import timezone
 
 from academics.models import AcademicTerm, StudentEnrollment
@@ -23,42 +23,65 @@ from .models import (
 )
 
 
-def term_start_date(tenant_id, academic_year, period_label):
+def billing_enrollments(tenant_id, academic_year, period_label, on_date):
     base_label = period_label.split(" (supplementary", 1)[0].strip()
     term = AcademicTerm.objects.filter(
         tenant_id=tenant_id,
         academic_year=academic_year,
         name__iexact=base_label,
     ).first()
-    return term.start_date if term else academic_year.start_date
+    start = term.start_date if term else academic_year.start_date
+    base = StudentEnrollment.objects.filter(
+        tenant_id=tenant_id,
+        school_class__academic_year=academic_year,
+        enrolled_on__lte=start,
+        status__in=(StudentEnrollment.Status.ACTIVE, StudentEnrollment.Status.TRANSFERRED),
+    ).filter(Q(ended_on__isnull=True) | Q(ended_on__gte=start))
+    if not term:
+        return base, term, start
+
+    late = StudentEnrollment.objects.filter(
+        tenant_id=tenant_id,
+        school_class__academic_year=academic_year,
+        enrolled_on__gt=start,
+        enrolled_on__lte=min(on_date, term.end_date),
+        status__in=(StudentEnrollment.Status.ACTIVE, StudentEnrollment.Status.TRANSFERRED),
+    )
+    first_late = late.filter(student_id=OuterRef("student_id")).order_by("enrolled_on").values("enrolled_on")[:1]
+    has_at_start = base.filter(student_id=OuterRef("student_id"))
+    selected_late = late.annotate(_has_at_start=Exists(has_at_start)).filter(
+        _has_at_start=False, enrolled_on=Subquery(first_late),
+    )
+    return StudentEnrollment.objects.filter(Q(pk__in=base.values("pk")) | Q(pk__in=selected_late.values("pk"))), term, start
 
 
-def _term_start_enrollment(student, academic_year, period_label):
-    base_label = period_label.split(" (supplementary", 1)[0].strip()
-    term = AcademicTerm.objects.filter(
-        tenant_id=student.tenant_id,
-        academic_year=academic_year,
-        name__iexact=base_label,
-    ).first()
-    on_date = term_start_date(student.tenant_id, academic_year, period_label)
+def _billing_enrollment(student, academic_year, period_label, on_date):
+    candidates, term, start = billing_enrollments(student.tenant_id, academic_year, period_label, on_date)
     enrollments = list(
-        StudentEnrollment.objects.filter(
-            tenant_id=student.tenant_id,
-            student=student,
-            school_class__academic_year=academic_year,
-            enrolled_on__lte=on_date,
-            status__in=(StudentEnrollment.Status.ACTIVE, StudentEnrollment.Status.TRANSFERRED),
-        ).filter(Q(ended_on__isnull=True) | Q(ended_on__gte=on_date))
+        candidates.filter(student=student)
         .select_related("school_class__class_level", "school_class__campus", "campus")
     )
     if len(enrollments) > 1:
         raise FinanceError(
-            f"{student.first_name} {student.last_name} has multiple class enrollments covering "
-            f"{term.name if term else academic_year.name}'s start. Resolve the academic history before billing.",
+            f"{student.first_name} {student.last_name} has multiple class enrollments on the billing "
+            f"enrollment date for {term.name if term else academic_year.name}. Resolve the academic history before billing.",
             409,
             "enrollment",
         )
     enrollment = enrollments[0] if enrollments else None
+    if enrollment is None and term and StudentEnrollment.objects.filter(
+        tenant_id=student.tenant_id,
+        student=student,
+        school_class__academic_year=academic_year,
+        enrolled_on__gt=start,
+        status__in=(StudentEnrollment.Status.ACTIVE, StudentEnrollment.Status.TRANSFERRED),
+    ).exists():
+        raise FinanceError(
+            "No eligible class enrollment has started during this term. Check the enrollment dates before billing.",
+            400,
+            "enrollment",
+        )
+    enrollment_date = max(start, enrollment.enrolled_on) if enrollment else start
     warnings = []
     if term is None:
         warnings.append(
@@ -68,13 +91,17 @@ def _term_start_enrollment(student, academic_year, period_label):
         warnings.append(
             "No class enrollment covers the term start; legacy profile class and campus were used for this preview."
         )
-    elif not enrollment.campus_id and (
-        enrollment.school_class.campus_id or student.campus_id
-    ):
-        warnings.append(
-            "The enrollment has no campus snapshot; the class-group or legacy profile campus was used for billing."
-        )
-    return enrollment, on_date, warnings
+    else:
+        if enrollment_date > start:
+            warnings.append(
+                f"Student joined after term start; the first class enrollment on {enrollment_date.isoformat()} "
+                "was used. The full configured fee applies."
+            )
+        if not enrollment.campus_id and (enrollment.school_class.campus_id or student.campus_id):
+            warnings.append(
+                "The enrollment has no campus snapshot; the class-group or legacy profile campus was used for billing."
+            )
+    return enrollment, enrollment_date, warnings
 
 
 def _enrollment_campus(student, enrollment):
@@ -191,7 +218,7 @@ def calculate_billing(student, year, period_label, on_date, *, only_categories=N
             {"description": schedule.category.name, "applicability": schedule.applicability, "code": code, "reason": reason}
         )
 
-    enrollment, term_start, warnings = _term_start_enrollment(student, year, period_label)
+    enrollment, enrollment_date, warnings = _billing_enrollment(student, year, period_label, on_date)
     class_name = enrollment.school_class.name if enrollment else student.grade_level
     campus = _enrollment_campus(student, enrollment)
     for schedule in applicable_schedules(student, year, on_date, enrollment=enrollment):
@@ -255,7 +282,7 @@ def calculate_billing(student, year, period_label, on_date, *, only_categories=N
     return {
         "lines": lines, "excluded": excluded, "blockers": blockers,
         "subtotal": subtotal, "discount_total": subtotal - remaining, "total": remaining,
-        "enrollment": enrollment, "enrollment_date": term_start, "warnings": warnings,
+        "enrollment": enrollment, "enrollment_date": enrollment_date, "warnings": warnings,
         "class_name": class_name, "campus": campus,
     }
 

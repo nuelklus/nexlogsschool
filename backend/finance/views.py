@@ -8,7 +8,7 @@ from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from academics.models import SchoolClassLevel, StudentEnrollment
+from academics.models import SchoolClass, SchoolClassLevel, StudentEnrollment
 from core.enrollment import _audit, _membership
 from core.models import AcademicYear, Campus, Membership, Student, StudentGuardian
 
@@ -724,6 +724,19 @@ def _supplementary(data):
 BULK_LIMIT = 300
 
 
+class BillingClassListView(FinanceView):
+    def get(self, request, tenant_id):
+        self.member(request, tenant_id, FINANCE)
+        year = self.get_or_404(
+            AcademicYear, tenant_id, out.parse_uuid(request.query_params.get("academic_year"), "academic_year")
+        )
+        classes = SchoolClass.objects.filter(tenant_id=tenant_id, academic_year=year).order_by("name", "section", "id")
+        return Response([
+            {"id": str(item.pk), "name": item.name, "section": item.section, "is_active": item.is_active}
+            for item in classes
+        ])
+
+
 def _selected_students(view, tenant_id, data):
     """Active students chosen by id, class or campus for the selected academic period."""
     queryset = Student.objects.filter(tenant_id=tenant_id, status=Student.Status.ACTIVE)
@@ -731,19 +744,28 @@ def _selected_students(view, tenant_id, data):
         AcademicYear, tenant_id, out.parse_uuid(data.get("academic_year"), "academic_year")
     )
     period_label = out.parse_text(data, "period_label", 60, required=False)
-    as_of = billing.term_start_date(tenant_id, year, period_label)
-    covering_enrollments = StudentEnrollment.objects.filter(
-        tenant_id=tenant_id,
-        school_class__academic_year=year,
-        enrolled_on__lte=as_of,
-        status__in=(StudentEnrollment.Status.ACTIVE, StudentEnrollment.Status.TRANSFERRED),
-    ).filter(Q(ended_on__isnull=True) | Q(ended_on__gte=as_of))
+    covering_enrollments, term, start = billing.billing_enrollments(tenant_id, year, period_label, timezone.localdate())
+    future_enrollment_students = StudentEnrollment.objects.none()
+    if term:
+        future_enrollment_students = StudentEnrollment.objects.filter(
+            tenant_id=tenant_id,
+            school_class__academic_year=year,
+            enrolled_on__gt=start,
+            status__in=(StudentEnrollment.Status.ACTIVE, StudentEnrollment.Status.TRANSFERRED),
+        )
     ids = data.get("students")
     if ids:
         if not isinstance(ids, list):
             raise FinanceError("Students must be a list.", 400, "students")
         queryset = queryset.filter(pk__in=[out.parse_uuid(i, "students") for i in ids])
-    elif data.get("grade_level") or data.get("class_level") or data.get("campus"):
+    elif data.get("school_class") or data.get("grade_level") or data.get("class_level") or data.get("campus"):
+        if data.get("school_class"):
+            school_class = view.get_or_404(
+                SchoolClass, tenant_id, out.parse_uuid(data["school_class"], "school_class"), academic_year=year
+            )
+            queryset = queryset.filter(pk__in=covering_enrollments.filter(
+                school_class=school_class
+            ).values("student_id"))
         if data.get("grade_level"):
             class_name = str(data["grade_level"]).strip()
             enrolled_matches = covering_enrollments.filter(
@@ -752,7 +774,9 @@ def _selected_students(view, tenant_id, data):
             legacy_matches = Student.objects.filter(
                 tenant_id=tenant_id, status=Student.Status.ACTIVE,
                 grade_level__iexact=class_name,
-            ).exclude(pk__in=covering_enrollments.values("student_id")).values("pk")
+            ).exclude(pk__in=covering_enrollments.values("student_id")).exclude(
+                pk__in=future_enrollment_students.values("student_id")
+            ).values("pk")
             queryset = queryset.filter(Q(pk__in=enrolled_matches) | Q(pk__in=legacy_matches))
         if data.get("class_level"):
             level_id = out.parse_uuid(data["class_level"], "class_level")
@@ -780,7 +804,9 @@ def _selected_students(view, tenant_id, data):
                 tenant_id=tenant_id,
                 status=Student.Status.ACTIVE,
                 campus_id=campus_id,
-            ).exclude(pk__in=covering_enrollments.values("student_id")).values("pk")
+            ).exclude(pk__in=covering_enrollments.values("student_id")).exclude(
+                pk__in=future_enrollment_students.values("student_id")
+            ).values("pk")
             queryset = queryset.filter(Q(pk__in=enrollment_matches) | Q(pk__in=legacy_matches))
     else:
         raise FinanceError("Choose students, a class or a campus.", 400, "students")

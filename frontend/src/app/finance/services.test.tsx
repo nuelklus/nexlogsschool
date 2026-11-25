@@ -74,6 +74,7 @@ const route = (path: string) => {
   if (path.includes("academic-years/")) return json(years);
   if (path.includes("fee-categories/")) return json(categories);
   if (path.includes("fee-schedules/")) return json([]);
+  if (path.includes("billing-classes/")) return json([{ id: "class1", name: "JHS 1", section: "", is_active: true }]);
   if (path.includes("academics/class-options/")) return json(["JHS 1"]);
   if (path.includes("invoices/preview/")) return json(previewBody);
   if (path.includes("academics/terms/")) {
@@ -120,15 +121,54 @@ describe("invoice preview", () => {
     await within(section).findByRole("option", { name: "Term 1" });
     await within(section).findByRole("option", { name: "JHS 1" });
     await user.selectOptions(selects[1], "Term 1");
-    await user.selectOptions(selects[2], "JHS 1");
+    await user.selectOptions(selects[2], "class1");
     await user.click(screen.getByRole("button", { name: "Preview invoices" }));
 
     expect(await screen.findByText(/Not subscribed to Lunch\./)).toBeInTheDocument();
     expect(screen.getByText("Tuition: GHS 1,000.00")).toBeInTheDocument();
     expect(screen.getByText(/1 ready · 0 blocked · Total GHS 1,000.00/)).toBeInTheDocument();
     const call = authFetch.mock.calls.find(([path]) => String(path).includes("invoices/preview/"));
-    expect(JSON.parse(String((call?.[1] as RequestInit).body))).toMatchObject({ period_label: "Term 1", grade_level: "JHS 1" });
+    expect(JSON.parse(String((call?.[1] as RequestInit).body))).toMatchObject({ period_label: "Term 1", school_class: "class1" });
     expect(screen.queryByRole("button", { name: /Issue/ })).not.toBeInTheDocument();
+  });
+
+  it("lists classes and sections for the selected year and clears an old preview", async () => {
+    const authFetch = signInAs("owner", (path) => {
+      if (path.includes("academic-years/")) return json([...years, { id: "y2", name: "2027/2028", is_current: false }]);
+      if (path.includes("billing-classes/?academic_year=y1")) return json([
+        { id: "class1", name: "Nursary2-cl", section: "A", is_active: true },
+        { id: "class2", name: "Nursary2-cl", section: "B", is_active: true },
+      ]);
+      if (path.includes("billing-classes/?academic_year=y2")) return json([
+        { id: "class3", name: "Next class", section: "", is_active: true },
+      ]);
+      return route(path);
+    });
+    const user = userEvent.setup();
+    render(<BillingPage />);
+    const section = await screen.findByRole("region", { name: "Bulk billing" });
+    await within(section).findByRole("option", { name: "Nursary2-cl · A" });
+    expect(within(section).getByRole("option", { name: "Nursary2-cl · B" })).toBeInTheDocument();
+    expect(within(section).queryByRole("option", { name: "Nursary2-customlevel" })).not.toBeInTheDocument();
+    await user.selectOptions(within(section).getByLabelText("Term"), "Term 1");
+    await user.selectOptions(within(section).getByLabelText("Class"), "class2");
+    await user.click(within(section).getByRole("button", { name: "Preview invoices" }));
+    await screen.findByText("Tuition: GHS 1,000.00");
+    expect(JSON.parse(String(authFetch.mock.calls.find(([path]) => String(path).includes("invoices/preview/"))?.[1]?.body)))
+      .toMatchObject({ school_class: "class2" });
+    await user.selectOptions(within(section).getByLabelText("Academic year"), "y2");
+    expect(screen.queryByText("Tuition: GHS 1,000.00")).not.toBeInTheDocument();
+    expect(within(section).getByRole("button", { name: "Preview invoices" })).toBeDisabled();
+    await within(section).findByRole("option", { name: "Next class" });
+    expect(within(section).queryByRole("option", { name: "Nursary2-cl · A" })).not.toBeInTheDocument();
+  });
+
+  it("reports a class loading failure instead of showing invented options", async () => {
+    signInAs("owner", (path) => path.includes("billing-classes/") ? json({ detail: "Classes unavailable." }, 500) : route(path));
+    render(<BillingPage />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Classes unavailable.");
+    expect(screen.getByRole("button", { name: "Retry classes" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview invoices" })).toBeDisabled();
   });
 });
 

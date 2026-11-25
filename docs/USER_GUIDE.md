@@ -265,15 +265,19 @@ class.
 
 ### Set up fees
 
-1. Open **Finance → Fees**. Add the required fee categories if they do not
-   already exist.
+1. Open **Finance → Fees**. Review the fee categories and add any that are
+   missing, choosing an income account for each category. An owner or
+   administrator can add an income account on this page if needed.
 2. Under **Set a fee**, select the academic year, fee category and class
    level or all class levels. Enter the amount, applicability and effective
    dates.
 3. For optional or individual services, set up the student's subscription
    under **Finance → Services**. Per-unit fees also need the relevant usage.
-4. Check the fee configuration before generating invoices. Class-level fees
-   rely on the class's configured level.
+4. Review **Fee schedules** before generating invoices. Search by category
+   or class level, or filter by academic year and status. Check the effective
+   dates and activate or deactivate schedules as needed. Class-level fees
+   rely on the class's configured level. Saving a schedule does not create
+   an invoice, and changes do not alter previously issued invoices.
 
 ### Preview, create and issue invoices
 
@@ -281,8 +285,11 @@ class.
 2. To bill one student, choose **Bill a student**, select the student, year,
    term and optional due date, then create the draft.
 3. For a class, use **Preview and bill a class**. Select the year, term and
-   class, run the preview, and check each student's fees, excluded items,
-   warnings and any blockers.
+   actual class or section for that year, run the preview, and check each
+   student's fees, excluded items, warnings and any blockers. The class's
+   linked level determines which class-level fees apply. Only students with
+   an eligible enrollment in the selected class are included; enroll students
+   without a class enrollment or bill them individually.
 4. Create drafts for eligible students, review them and issue them when
    correct. Issuing makes invoices visible to eligible parents and posts
    them to the ledger. Check any per-student failures.
@@ -291,8 +298,11 @@ class.
 For third-term fees, select the old year and term. For the new year's first
 term, create the new classes and fees, promote students, then preview and
 issue the new-year invoices. Billing normally resolves the class enrollment
-at the start of the selected term; if no enrollment covers that date it may
-use the profile class and show a warning. Always inspect the preview.
+at the start of the selected term. For a student who joins later in the term,
+it uses the first class enrollment during that term and charges the full
+configured fee, without automatic proration. The preview shows a warning for
+late enrollment. If no suitable enrollment exists, it may use the profile
+class and show a warning. Always inspect the preview.
 Promotion does not change existing invoices.
 
 An issued invoice's detail may show **Brought forward from earlier

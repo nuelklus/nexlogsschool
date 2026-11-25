@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 
-import { ClassOptions, ClassOptionsStatus, useClassOptions } from "../class-options";
 import { NoTermsHint } from "./no-terms-hint";
 import { useTermOptions } from "./use-term-options";
 import { Student, listStudents } from "../school/student-api";
@@ -11,6 +10,7 @@ import { FeeCategory, Invoice, Preview, financeRequest, formatMoney } from "./fi
 import FinanceShell, { FinanceContext, useFinanceData } from "./finance-shell";
 
 type Year = { id: string; name: string; is_current: boolean };
+type BillingClass = { id: string; name: string; section: string; is_active: boolean };
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : "Something went wrong. Try again.");
 const text = (data: FormData, name: string) => String(data.get(name) ?? "").trim();
@@ -102,11 +102,12 @@ function GenerateForm({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
 }
 
 function BulkBilling({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
-  const classes = useClassOptions(ctx.authFetch, ctx.tenantId, "finance");
   const current = years.find((year) => year.is_current) ?? years[0];
   const categories = useFinanceData<FeeCategory[]>(ctx, "fee-categories/");
-  const [form, setForm] = useState({ year: current?.id ?? "", term: "", grade: "", due: "" });
+  const [form, setForm] = useState({ year: current?.id ?? "", term: "", schoolClass: "", due: "" });
   const terms = useTermOptions(ctx, form.year);
+  const [classState, setClassState] = useState<{ year: string; data: BillingClass[] | null; error: string }>({ year: "", data: null, error: "" });
+  const [classAttempt, setClassAttempt] = useState(0);
   const [supplementary, setSupplementary] = useState(false);
   const [chosen, setChosen] = useState<string[]>([]);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -114,16 +115,46 @@ function BulkBilling({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
   const [message, setMessage] = useState("");
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const { authFetch, tenantId, onFailure } = ctx;
+
+  useEffect(() => {
+    let active = true;
+    financeRequest<unknown>(authFetch, tenantId, `billing-classes/?academic_year=${encodeURIComponent(form.year)}`)
+      .then((result) => {
+        if (!Array.isArray(result) || !result.every((item) =>
+          item && typeof item === "object" && typeof item.id === "string" && typeof item.name === "string"
+          && typeof item.section === "string" && typeof item.is_active === "boolean")) {
+          throw new Error("The server returned an unexpected class list.");
+        }
+        if (active) setClassState({ year: form.year, data: result, error: "" });
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          onFailure(error);
+          setClassState({ year: form.year, data: null, error: errorText(error) });
+        }
+      });
+    return () => { active = false; };
+  }, [authFetch, tenantId, onFailure, form.year, classAttempt]);
+
+  const classes = classState.year === form.year ? classState.data : null;
+  const classError = classState.year === form.year ? classState.error : "";
 
   const body = () => ({
     academic_year: form.year,
     period_label: form.term,
-    grade_level: form.grade,
+    school_class: form.schoolClass,
     due_date: form.due || undefined,
     supplementary: supplementary || undefined,
     categories: supplementary ? chosen : undefined,
   });
-  const ready = Boolean(form.year && form.term && form.grade && classes.options?.includes(form.grade) && (!supplementary || chosen.length > 0));
+  const ready = Boolean(form.year && form.term && classes?.some((item) => item.id === form.schoolClass) && (!supplementary || chosen.length > 0));
+
+  function changeForm(next: typeof form) {
+    setForm(next);
+    setPreview(null);
+    setMessage("");
+  }
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -140,7 +171,7 @@ function BulkBilling({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
 
   const runPreview = () =>
     run(async () => {
-      setDrafts([]);
+      setPreview(null);
       setPreview(await financeRequest<Preview>(ctx.authFetch, ctx.tenantId, "invoices/preview/", { method: "POST", body: body() }));
     });
 
@@ -163,34 +194,38 @@ function BulkBilling({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
       setFailed(result.failed > 0);
       setMessage(`${result.issued} invoice(s) issued.${result.failed ? ` ${result.failed} failed: ${result.errors.map((e) => e.error).join("; ")}` : ""}`);
       setDrafts([]);
+      setPreview(null);
     });
 
   return (
     <section className="enrol-card" aria-label="Bulk billing">
       <div className="enrol-card-head"><div><p className="eyebrow">BULK BILLING</p><h2>Preview and bill a class</h2></div></div>
       <p className="fin-note">Preview shows exactly what each student would be charged, and which optional fees are left out, before anything is created.</p>
+      <p className="fin-note">Only students with an eligible enrollment in the selected class are included. Students without a class enrollment must be enrolled before class billing, or billed individually.</p>
+      <fieldset className="enrol-fieldset" disabled={busy || drafts.length > 0}>
+      <legend>Billing selection</legend>
       <div className="enrol-grid">
         <label>Academic year
-          <select value={form.year} onChange={(event) => setForm({ ...form, year: event.target.value, term: "" })}>
+          <select value={form.year} onChange={(event) => changeForm({ ...form, year: event.target.value, term: "", schoolClass: "" })}>
             {years.map((year) => <option key={year.id} value={year.id}>{year.name}</option>)}
           </select>
         </label>
         <label>Term
-          <select value={form.term} onChange={(event) => setForm({ ...form, term: event.target.value })}>
+          <select value={form.term} onChange={(event) => changeForm({ ...form, term: event.target.value })}>
             <option value="" disabled>Select term</option>
             {terms.map((term) => <option key={term} value={term}>{term}</option>)}
           </select>
         </label>
         <NoTermsHint ctx={ctx} yearId={form.year} />
         <label>Class
-          <select value={form.grade} disabled={!classes.options} onChange={(event) => setForm({ ...form, grade: event.target.value })}>
+          <select value={form.schoolClass} disabled={!classes} onChange={(event) => changeForm({ ...form, schoolClass: event.target.value })}>
             <option value="" disabled>Select class</option>
-            <ClassOptions options={classes.options} />
+            {classes?.map((item) => <option key={item.id} value={item.id}>{item.name}{item.section ? ` · ${item.section}` : ""}{item.is_active ? "" : " (archived)"}</option>)}
           </select>
         </label>
-        <label>Due date (optional)<input type="date" value={form.due} onChange={(event) => setForm({ ...form, due: event.target.value })} /></label>
+        <label>Due date (optional)<input type="date" value={form.due} onChange={(event) => changeForm({ ...form, due: event.target.value })} /></label>
         <label className="enrol-wide">
-          <span><input type="checkbox" checked={supplementary} onChange={(event) => setSupplementary(event.target.checked)} /> Supplementary invoice for services added after the term was billed</span>
+          <span><input type="checkbox" checked={supplementary} onChange={(event) => { setSupplementary(event.target.checked); setPreview(null); }} /> Supplementary invoice for services added after the term was billed</span>
         </label>
         {supplementary && (
           <fieldset className="enrol-wide">
@@ -200,16 +235,20 @@ function BulkBilling({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
                 <input
                   type="checkbox"
                   checked={chosen.includes(c.id)}
-                  onChange={(event) => setChosen(event.target.checked ? [...chosen, c.id] : chosen.filter((id) => id !== c.id))}
+                  onChange={(event) => { setChosen(event.target.checked ? [...chosen, c.id] : chosen.filter((id) => id !== c.id)); setPreview(null); }}
                 /> {c.name}
               </label>
             ))}
           </fieldset>
         )}
       </div>
-      <ClassOptionsStatus options={classes.options} error={classes.error} />
+      </fieldset>
+      {classError && <p className="setup-error" role="alert">{classError}</p>}
+      {classError && <button className="auth-signout" type="button" onClick={() => { setClassState({ year: "", data: null, error: "" }); setClassAttempt((value) => value + 1); }}>Retry classes</button>}
+      {!classes && !classError && <p className="fin-note" role="status">Loading classes…</p>}
+      {classes?.length === 0 && <p className="fin-note">No classes are configured for this academic year.</p>}
       <div className="enrol-actions">
-        <button type="button" className="setup-submit" disabled={busy || !ready} onClick={() => void runPreview()}>Preview invoices</button>
+        <button type="button" className="setup-submit" disabled={busy || !ready || drafts.length > 0} onClick={() => void runPreview()}>Preview invoices</button>
       </div>
       {message && <p className={failed ? "setup-error" : "enrol-success"} role={failed ? "alert" : "status"}>{message}</p>}
       {preview && (
@@ -243,7 +282,10 @@ function BulkBilling({ ctx, years }: { ctx: FinanceContext; years: Year[] }) {
               Create {preview.ready} draft invoice(s)
             </button>
             {drafts.length > 0 && (
-              <button type="button" className="setup-submit" disabled={busy} onClick={() => void issueDrafts()}>Issue {drafts.length} draft(s)</button>
+              <>
+                <button type="button" className="setup-submit" disabled={busy} onClick={() => void issueDrafts()}>Issue {drafts.length} draft(s)</button>
+                <button type="button" className="auth-signout" disabled={busy} onClick={() => { setDrafts([]); setPreview(null); setMessage("Created drafts remain available under Finance → Invoices."); setFailed(false); }}>Start another preview</button>
+              </>
             )}
           </div>
         </div>

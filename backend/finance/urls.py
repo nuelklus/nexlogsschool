@@ -14,6 +14,7 @@ urlpatterns = [
     path(base + "accounts/", v.AccountListView.as_view()),
     path(base + "accounts/<uuid:account_id>/", v.AccountDetailView.as_view()),
     path(base + "academic-years/", v.AcademicYearListView.as_view()),
+    path(base + "billing-classes/", v.BillingClassListView.as_view()),
     path(base + "payment-methods/", v.PaymentMethodListView.as_view()),
     path(base + "periods/", v.PeriodListView.as_view()),
     path(base + "periods/<uuid:period_id>/", v.PeriodDetailView.as_view()),

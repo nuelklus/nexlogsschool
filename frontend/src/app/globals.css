@@ -680,6 +680,31 @@ a {
 .fin-filter, .fin-inline, .fin-inline-controls, .heading-actions, .fin-chips { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .fin-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 .fin-note { color: #5b6b66; font-size: 13px; margin: 0; }
+.fees-page, .fees-sections { display: grid; gap: 18px; min-width: 0; }
+.fees-workflow { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 10px; }
+.fees-workflow a { display: grid; gap: 5px; padding: 14px; border: 1px solid #d6e5dc; border-radius: 9px; background: #f4faf6; color: #233d30; text-decoration: none; font-size: 13px; }
+.fees-workflow a:hover { border-color: var(--accent); }
+.fees-workflow a:focus-visible, .fee-table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.fees-workflow span { color: #52665a; line-height: 1.4; }
+.fee-categories, .fee-form, .fee-schedules { min-width: 0; scroll-margin-top: 16px; }
+.fee-category-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.fee-category-list li { display: grid; gap: 3px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: #f8faf8; font-size: 13px; }
+.fee-category-list span { color: var(--muted); font-size: 12px; }
+.fee-category-form, .fee-account-form { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border); justify-items: start; }
+.fee-category-form h3, .fee-account-form h3 { margin: 0; font-size: 15px; }
+.fee-category-form .enrol-grid, .fee-account-form .enrol-grid { width: 100%; }
+.fee-year-form { display: grid; gap: 12px; justify-items: start; }
+.fee-year-form .enrol-grid { width: 100%; }
+.fees-page .enrol-grid { align-items: start; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.fees-page .enrol-grid select, .fee-filters input, .fee-filters select { width: 100%; min-height: 40px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: #fbfcfb; color: var(--foreground); font: inherit; font-size: 14px; }
+.fees-page .enrol-grid select:focus, .fee-filters input:focus, .fee-filters select:focus { outline: 2px solid rgba(23, 107, 85, 0.25); border-color: var(--accent); background: #fff; }
+.fee-form .enrol-fieldset { padding-top: 14px; border-top: 1px solid var(--border); }
+.fee-form .enrol-fieldset legend { color: #34463e; font-size: 12px; font-weight: 700; }
+.fee-notice { margin: 0; padding: 10px 12px; border-left: 3px solid #92701f; background: #fff9e9; color: #4b3b13; font-size: 13px; line-height: 1.5; }
+.fee-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 12px; }
+.fee-filters label { display: grid; gap: 6px; min-width: 0; font-size: 13px; font-weight: 500; }
+.fee-table-scroll { max-width: 100%; overflow-x: auto; }
+.fee-table-scroll .fin-table { min-width: 780px; }
 .fin-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .fin-facts { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin: 0; }
 .fin-facts dt { font-size: 12px; color: #5b6b66; }
@@ -699,6 +724,8 @@ a {
   .academic-columns { grid-template-columns: 1fr; }
 }
 @media (max-width: 620px) {
+  .fees-page .enrol-grid { grid-template-columns: 1fr; }
+  .fees-page .enrol-grid .enrol-wide { grid-column: auto; }
   .academic-form-grid { grid-template-columns: 1fr; }
   .academic-form-grid .academic-field-wide { grid-column: auto; }
   .academic-card { padding: 16px; }
