@@ -9,3 +9,8 @@ backend/db.sqlite3
 backend/private_media/
 frontend/node_modules/
 frontend/.next/
+# Never upload local/server Docker configuration
+backend/Dockerfile
+backend/docker-compose.yml
+frontend/Dockerfile
+frontend/docker-compose.yml
